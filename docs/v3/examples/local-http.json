@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "example-local-mcp",
+  "name": "Synthetic example (not installable)",
+  "source": {
+    "url": "https://example.invalid/mcp",
+    "version": "UNVERIFIED"
+  },
+  "runtime": {
+    "kind": "http",
+    "url": "http://127.0.0.1:9000/mcp"
+  },
+  "startup": "on-demand",
+  "resources": {
+    "memory_mb": 128,
+    "timeout_seconds": 30,
+    "idle_seconds": 600
+  },
+  "permissions": {
+    "filesystem": "none",
+    "network": [],
+    "secret_refs": []
+  },
+  "groups": [
+    "Custom"
+  ],
+  "dependencies": []
+}
