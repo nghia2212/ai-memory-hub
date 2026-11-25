@@ -116,7 +116,7 @@ def create_trace_router(db, cfg):
             return decode(conn.execute("SELECT * FROM v22_execution_traces WHERE trace_id=?", (data["trace_id"],)).fetchone())
 
     @router.get("")
-    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, task_id: UUID | None=None, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), search: str | None=Query(None,max_length=200), sort: str=Query('time_asc',pattern='^(time_asc|time_desc|duration_desc|status)):
+    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, task_id: UUID | None=None, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), search: str | None=Query(None,max_length=200), sort: str=Query("time_asc", pattern=r"^(time_asc|time_desc|duration_desc|status)$"), p=Depends(reader)):
         project = str(project_id)
         filters = {"project_id":project,"worktree_id":worktree_id,"session_id":session_id,"plan_id":plan_id,"task_id":task_id,"root_trace_id":root_trace_id,"actor_id":actor_id,"model_id":model_id,"status":status}
         clauses, args = [], []
