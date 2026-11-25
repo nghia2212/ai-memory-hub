@@ -1,5 +1,7 @@
 """Scoped, authenticated execution trace ingestion and read API."""
 import json
+import os
+import hmac
 from uuid import UUID
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, Request
@@ -17,8 +19,13 @@ def create_trace_router(db, cfg):
         require_scope(p, "read")
         return p
 
-    def writer(p=Depends(principal)):
-        require_any_scope(p, "write", "planner", "runner")
+    def writer(request: Request):
+        token = extract_bearer_token(request.headers.get("Authorization"))
+        dedicated = os.environ.get("BRIDGE_TRACE_TOKEN")
+        if token and dedicated and hmac.compare_digest(token,dedicated):
+            return "trace_only"
+        p = authenticate_token(token,cfg)
+        require_any_scope(p,"write","planner","runner")
         return p
 
     def check_scope(conn, project, worktree=None):
