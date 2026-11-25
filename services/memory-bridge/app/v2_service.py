@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .db import DatabaseManager, utc_now_iso
+from .db import DatabaseManager, reconcile_expired_job_leases, utc_now_iso
 from .errors import BridgeError
 from .security import redact_payload
 from .v2_schemas import (
@@ -910,7 +910,12 @@ class V2BridgeService:
             )
         return self.get_plan(plan_id, pid)
 
+    def _reconcile_expired_leases(self) -> None:
+        with self.db.write_tx() as conn:
+            reconcile_expired_job_leases(conn, utc_now_iso())
+
     def list_plans(self, project_id: str) -> dict[str, Any]:
+        self._reconcile_expired_leases()
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)
             rows = conn.execute(
@@ -920,6 +925,7 @@ class V2BridgeService:
             return {"items": [dict(r) for r in rows]}
 
     def get_plan(self, plan_id: str, project_id: str) -> dict[str, Any]:
+        self._reconcile_expired_leases()
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)
             plan = conn.execute(
@@ -960,6 +966,12 @@ class V2BridgeService:
             if plan["status"] in ("RUNNING", "COMPLETED", "CANCELLED"):
                 raise BridgeError(409, "plan_state_conflict", f"Cannot revise plan in state {plan['status']}")
 
+            unresolved = conn.execute(
+                "SELECT 1 FROM v2_tasks WHERE plan_id = ? AND state IN ('leased','running','blocked') LIMIT 1",
+                (plan_id,),
+            ).fetchone()
+            if unresolved:
+                raise BridgeError(409, "unresolved_attempt", "Review active or unknown task outcomes before revising")
             rev_hash = self._validate_dag_and_hash(plan["objective"], req.tasks)
             max_rev = conn.execute(
                 "SELECT COALESCE(MAX(revision_number), 0) AS n FROM v2_plan_revisions WHERE plan_id = ?",
@@ -1118,8 +1130,15 @@ class V2BridgeService:
             ).fetchone()
             if not plan:
                 raise BridgeError(404, "plan_not_found", "Plan not found")
-            if action == "resume" and not plan["approved_revision_id"]:
-                raise BridgeError(409, "no_approved_revision", "Cannot resume plan without approved revision")
+            if action == "resume":
+                if plan["status"] != "PAUSED" or not plan["approved_revision_id"]:
+                    raise BridgeError(409, "no_approved_revision", "Only paused approved plans can resume")
+                blocked = conn.execute(
+                    "SELECT 1 FROM v2_tasks WHERE revision_id = ? AND state = 'blocked' LIMIT 1",
+                    (plan["approved_revision_id"],),
+                ).fetchone()
+                if blocked:
+                    raise BridgeError(409, "unknown_outcome", "Review blocked task outcomes before creating a new approved plan")
             conn.execute(
                 "UPDATE v2_plans SET status = ?, updated_at = ? WHERE id = ?",
                 (target_status, now, plan_id),
@@ -1167,6 +1186,8 @@ class V2BridgeService:
             policy = self._get_policy_row(conn, pid)
             if policy["kill_switch"]:
                 raise BridgeError(403, "kill_switch_active", "Project kill switch is active")
+
+            reconcile_expired_job_leases(conn, now)
 
             # Enforce concurrency limit
             active_leases = conn.execute(
@@ -1305,10 +1326,15 @@ class V2BridgeService:
             SELECT l.*, t.project_id, t.worktree_id, t.plan_id, t.revision_id, s.id AS session_id
             FROM v2_job_leases l
             JOIN v2_tasks t ON t.id = l.task_id
+            JOIN v2_plans p ON p.id = t.plan_id
             LEFT JOIN v2_sessions s ON s.attempt_id = l.attempt_id
             WHERE l.task_id = ? AND t.project_id = ? AND l.lease_id = ? AND l.released_at IS NULL
+              AND julianday(l.expires_at) > julianday(?)
+              AND t.state IN ('leased', 'running')
+              AND p.approved_revision_id = t.revision_id
+              AND p.status IN ('APPROVED', 'RUNNING', 'PAUSED')
             """,
-            (job_id, project_id, lease_id),
+            (job_id, project_id, lease_id, utc_now_iso()),
         ).fetchone()
         if not row:
             raise BridgeError(409, "lease_invalid", "Active lease not found for job")
@@ -1320,6 +1346,8 @@ class V2BridgeService:
         expires_at = (now_dt + timedelta(seconds=req.lease_seconds)).isoformat()
         with self.db.write_tx() as conn:
             lease = self._verify_active_lease(conn, job_id, str(req.project_id), str(req.lease_id))
+            if lease["runner_id"] != req.runner_id:
+                raise BridgeError(409, "runner_mismatch", "Lease belongs to a different runner")
             conn.execute(
                 "UPDATE v2_job_leases SET heartbeat_at = ?, expires_at = ? WHERE lease_id = ?",
                 (now, expires_at, str(req.lease_id)),

@@ -536,6 +536,40 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def reconcile_expired_job_leases(conn: sqlite3.Connection, now: str) -> int:
+    """Caller owns write transaction. Unknown outcomes must never auto-requeue."""
+    rows = conn.execute(
+        """SELECT l.lease_id, l.attempt_id, l.task_id, t.plan_id
+           FROM v2_job_leases l JOIN v2_tasks t ON t.id = l.task_id
+           WHERE l.released_at IS NULL AND julianday(l.expires_at) <= julianday(?)""",
+        (now,),
+    ).fetchall()
+    for row in rows:
+        lease_id, attempt_id, task_id, plan_id = row
+        conn.execute("UPDATE v2_job_leases SET released_at = ? WHERE lease_id = ?", (now, lease_id))
+        conn.execute(
+            """UPDATE v2_task_attempts SET status = 'orphaned', ended_at = ?,
+               error_code = 'lease_expired', error_summary = 'Outcome unknown; review before retry'
+               WHERE id = ? AND status IN ('claimed', 'running')""",
+            (now, attempt_id),
+        )
+        conn.execute(
+            """UPDATE v2_sessions SET status = 'partial', incomplete_coverage = 1, ended_at = ?
+               WHERE attempt_id = ? AND status = 'running'""", (now, attempt_id),
+        )
+        changed = conn.execute(
+            "UPDATE v2_tasks SET state = 'blocked', updated_at = ? WHERE id = ? AND state IN ('leased', 'running')",
+            (now, task_id),
+        ).rowcount
+        if changed:
+            conn.execute(
+                "UPDATE v2_plans SET status = 'PAUSED', updated_at = ? WHERE id = ? AND status IN ('APPROVED', 'RUNNING')",
+                (now, plan_id),
+            )
+        # Preserve budget reservation: usage/outcome is not known.
+    return len(rows)
+
+
 class DatabaseManager:
     """Thread-safe sole SQLite writer with WAL, migrations, online backup and atomic restore."""
 
@@ -603,7 +637,7 @@ class DatabaseManager:
                 raise
 
     def _reconcile_on_startup(self, conn: sqlite3.Connection) -> None:
-        """Reset non-persistent auto mode and orphan/partial active leases on restart."""
+        """Reset non-persistent auto mode; preserve live leases and quarantine expired attempts."""
         now = utc_now_iso()
         conn.execute("BEGIN IMMEDIATE;")
         try:
@@ -615,25 +649,17 @@ class DatabaseManager:
                 """,
                 (now,),
             )
+            reconcile_expired_job_leases(conn, now)
+            # Keep valid managed leases across Bridge restarts. Unleased external
+            # sessions have no live proof after restart.
             conn.execute(
-                "UPDATE v2_job_leases SET released_at = ? WHERE released_at IS NULL",
-                (now,),
-            )
-            conn.execute(
-                """
-                UPDATE v2_task_attempts
-                SET status = 'orphaned', ended_at = ?, error_code = 'restart_reconciled', error_summary = 'Bridge restarted while attempt was active'
-                WHERE status IN ('claimed', 'running')
-                """,
-                (now,),
-            )
-            conn.execute(
-                "UPDATE v2_tasks SET state = 'queued', updated_at = ? WHERE state IN ('leased', 'running')",
-                (now,),
-            )
-            conn.execute(
-                "UPDATE v2_sessions SET status = 'partial', incomplete_coverage = 1, ended_at = ? WHERE status = 'running'",
-                (now,),
+                """UPDATE v2_sessions SET status = 'partial', incomplete_coverage = 1, ended_at = ?
+                   WHERE status = 'running' AND NOT EXISTS (
+                     SELECT 1 FROM v2_job_leases l
+                     WHERE l.attempt_id = v2_sessions.attempt_id AND l.released_at IS NULL
+                       AND julianday(l.expires_at) > julianday(?)
+                   )""",
+                (now, now),
             )
             conn.execute("COMMIT;")
         except Exception:

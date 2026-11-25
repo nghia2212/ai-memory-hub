@@ -27,3 +27,6 @@ Một attempt dừng ở claimed, heartbeat cuối 11:46:13 và lease hết 11:5
 Catalog thực tế: agy 1.1.27 liệt kê 10 selector, có Sonnet 5.5, chưa có Neon. Claude Code 2.1.269, Codex CLI 0.166.0; không tìm thấy Gemini CLI trên PATH. Lệnh discovery không dùng prompt.
 
 Docker stats (một mẫu, không phải peak): Bridge 76.79 MiB / 0.12% CPU, Dashboard 48.89 MiB / 0.13%, Codebase 72.87 MiB / 6.78%.
+
+### Tiếp quản từ Codex — checkpoint M1
+Đã sửa source: giữ lease còn hạn khi Bridge restart, quarantine attempt hết hạn thành orphaned/blocked và pause plan (không tự chạy lại), từ chối heartbeat sai runner hoặc lease hết hạn, chặn revision/resume khi outcome chưa rõ. Budget reservation giữ nguyên để đối soát. Reconcile khi startup, đọc plan hoặc claim. Thêm regression test synthetic. Không có quyền truy cập runtime laptop trong phiên GitHub này; test chưa chạy, chưa deploy. Còn cần UI hiển thị nguyên nhân blocked, quy trình owner reconciliation/settlement, kiểm tra pause/cancel propagation, actual result/telemetry và các milestone còn lại. Không merge main.
