@@ -45,6 +45,8 @@ def create_trace_router(db, cfg):
 
     @router.post("", status_code=201)
     def ingest(req: TraceEvent, request: Request, p=Depends(writer)):
+        if req.step_type == "session_usage":
+            raise BridgeError(403,"trace_role","Session usage is projected from V2 usage evidence")
         data = redact_payload(req.model_dump(mode="json"))
         # Normalize UTC representation consistently for lexicographic time filtering.
         for key in ("started_at","ended_at"):
