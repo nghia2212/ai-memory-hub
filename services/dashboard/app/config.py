@@ -22,6 +22,8 @@ class DashboardSettings:
     )
     bridge_read_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_READ_TOKEN", ""))
     bridge_admin_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_ADMIN_TOKEN", ""))
+    codebase_read_token: str = field(default_factory=lambda: os.environ.get("CODEBASE_READ_TOKEN", ""))
+    bridge_planner_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_PLANNER_TOKEN", ""))
     bridge_runner_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_RUNNER_TOKEN", ""))
     host_brain_url: str = field(default_factory=lambda: os.environ.get("HOST_BRAIN_URL", "http://host.docker.internal:8084"))
     dashboard_password: str = field(default_factory=lambda: os.environ.get("DASHBOARD_PASSWORD", ""))

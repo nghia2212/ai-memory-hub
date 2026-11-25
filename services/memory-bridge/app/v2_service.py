@@ -80,12 +80,12 @@ def _default_brain_roles() -> list[dict[str, Any]]:
         },
         {
             "role_name": "tier2_primary",
-            "preferred_label": "Gemini 4 Neon Medium (tạm đề xuất: Claude Sonnet 5.5 Medium)",
+            "preferred_label": "Gemini 4 Neon Medium",
             "effective_provider": "agy",
             "effective_model_id": "claude-sonnet-5-5-medium",
             "effective_effort": "medium",
             "auth_mode": "subscription_cli",
-            "availability_status": "verified",
+            "availability_status": "unavailable",
             "availability_reason": "Gemini 4 Neon chưa có trong agy models v1.1.27; tạm dùng claude-sonnet-5-5-medium đã xác minh qua CLI.",
             "fallback_order": ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high", "claude-sonnet-5-5-high"],
             "max_escalations": 1,
@@ -951,6 +951,23 @@ class V2BridgeService:
                 "revisions": [dict(r) for r in revs],
                 "tasks": [dict(t) for t in tasks],
                 "approvals": [dict(a) for a in approvals],
+                "forecast": json.loads(forecast["forecast_json"]) if (forecast := conn.execute(
+                    "SELECT f.forecast_json FROM v2_forecast_snapshots f JOIN v2_plan_revisions r "
+                    "ON r.forecast_id=f.id WHERE r.id=? AND f.project_id=?",
+                    (plan["current_revision_id"], project_id),
+                ).fetchone()) else None,
+                "attempts": [redact_payload(dict(row)) for row in conn.execute(
+                    """SELECT a.id, a.task_id, a.plan_revision_id, a.runner_id, a.status,
+                              a.started_at, a.ended_at, a.error_code, a.error_summary,
+                              l.heartbeat_at, l.expires_at, s.id AS session_id, o.handoff_summary,
+                              o.tests_passed, o.duration_ms, o.actual_changed_files
+                       FROM v2_tasks t JOIN v2_task_attempts a ON a.task_id=t.id
+                       LEFT JOIN v2_job_leases l ON l.attempt_id=a.id
+                       LEFT JOIN v2_sessions s ON s.attempt_id=a.id
+                       LEFT JOIN v2_session_outcomes o ON o.session_id=s.id
+                       WHERE t.plan_id=? AND t.project_id=?
+                       ORDER BY a.started_at DESC LIMIT 100""", (plan_id, project_id)
+                )],
             }
 
     def update_plan_revision(self, plan_id: str, req: PlanRevisionUpdateRequest) -> dict[str, Any]:
@@ -963,7 +980,10 @@ class V2BridgeService:
             ).fetchone()
             if not plan:
                 raise BridgeError(404, "plan_not_found", "Plan not found")
-            if plan["status"] in ("RUNNING", "COMPLETED", "CANCELLED"):
+            if conn.execute(
+                "SELECT 1 FROM v2_job_leases l JOIN v2_tasks t ON t.id=l.task_id "
+                "WHERE t.plan_id=? AND l.released_at IS NULL LIMIT 1", (plan_id,),
+            ).fetchone() or plan["status"] in ("RUNNING", "COMPLETED", "CANCELLED"):
                 raise BridgeError(409, "plan_state_conflict", f"Cannot revise plan in state {plan['status']}")
 
             unresolved = conn.execute(
@@ -1183,6 +1203,7 @@ class V2BridgeService:
 
         with self.db.write_tx() as conn:
             worktree = self._ensure_worktree(conn, pid, wid)
+            self.db.expire_leases(conn, now)
             policy = self._get_policy_row(conn, pid)
             if policy["kill_switch"]:
                 raise BridgeError(403, "kill_switch_active", "Project kill switch is active")
@@ -1210,10 +1231,11 @@ class V2BridgeService:
                 JOIN v2_plan_revisions r ON r.id = t.revision_id
                 WHERE t.project_id = ? AND t.worktree_id = ? AND t.state = 'queued'
                   AND p.status IN ('APPROVED', 'RUNNING')
-                  AND p.approved_revision_id = t.revision_id
+                  AND p.approved_revision_id = t.revision_id AND p.current_revision_id = t.revision_id
+                  AND (? IS NULL OR p.id = ?)
                 ORDER BY t.created_at ASC
                 """,
-                (pid, wid),
+                (pid, wid, str(req.plan_id) if req.plan_id else None, str(req.plan_id) if req.plan_id else None),
             ).fetchall()
 
             chosen: dict[str, Any] | None = None
@@ -1405,7 +1427,7 @@ class V2BridgeService:
                         handoff_summary = excluded.handoff_summary,
                         recorded_at = excluded.recorded_at
                     """,
-                    (parent_sid, req.peak_context_tokens, req.handoff_summary, now),
+                    (parent_sid, req.peak_context_tokens, redact_payload(req.handoff_summary), now),
                 )
             conn.execute("UPDATE v2_tasks SET state = 'checkpointed', updated_at = ? WHERE id = ?", (now, job_id))
             conn.execute("UPDATE v2_task_attempts SET status = 'checkpointed' WHERE id = ?", (lease["attempt_id"],))
@@ -1424,7 +1446,7 @@ class V2BridgeService:
                 SET status = ?, ended_at = ?, error_code = ?, error_summary = ?
                 WHERE id = ?
                 """,
-                (req.outcome, now, req.error_code, req.error_summary, lease["attempt_id"]),
+                (req.outcome, now, req.error_code, redact_payload(req.error_summary), lease["attempt_id"]),
             )
             task_state = req.outcome if req.outcome in ("succeeded", "failed", "cancelled") else "failed"
             conn.execute("UPDATE v2_tasks SET state = ?, updated_at = ? WHERE id = ?", (task_state, now, job_id))
@@ -1454,7 +1476,7 @@ class V2BridgeService:
                         req.duration_ms,
                         req.actual_changed_files,
                         req.peak_context_tokens,
-                        req.handoff_summary,
+                        redact_payload(req.handoff_summary),
                         now,
                     ),
                 )
@@ -1670,10 +1692,16 @@ class V2BridgeService:
 
             rows = conn.execute(
                 f"""
-                SELECT s.*, tf.task_type, tf.complexity, so.accepted, so.tests_passed, so.duration_ms, so.retries, so.peak_context_tokens
+                SELECT s.*, tf.task_type, tf.complexity, so.accepted, so.tests_passed, so.duration_ms,
+                       so.retries, so.peak_context_tokens, a.runner_id, a.status AS attempt_state,
+                       a.error_code, l.heartbeat_at, l.expires_at, w.branch, t.title AS task_title
                 FROM v2_sessions s
                 LEFT JOIN v2_task_features tf ON tf.session_id = s.id AND tf.phase = 'planned'
                 LEFT JOIN v2_session_outcomes so ON so.session_id = s.id
+                LEFT JOIN v2_task_attempts a ON a.id=s.attempt_id
+                LEFT JOIN v2_job_leases l ON l.attempt_id=a.id
+                JOIN worktrees w ON w.id=s.worktree_id
+                LEFT JOIN v2_tasks t ON t.id=s.task_id
                 WHERE {' AND '.join(clauses)}
                 ORDER BY s.started_at DESC
                 LIMIT 100

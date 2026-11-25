@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from .cbm_client import CBMBackend, CBMClientError
 from .config import Settings
+from .explorer import directory_page, safe_entry, source_page
 from .models import (
     IndexJobResponse,
     IndexRequest,
@@ -147,6 +148,33 @@ class CodebaseService:
                     detail={"code": "invalid_scope", "message": "Worktree root outside allowed root"},
                 ) from exc
         return entry
+
+    async def explore(self, project_id, worktree_id, view, path, symbol, offset, line, depth):
+        entry = await self._require_worktree(project_id, worktree_id)
+        root = Path(entry.container_root)
+        project = cbm_project_name(project_id, worktree_id)
+        snapshot = self._store.get_snapshot(project)
+        current = await self._inspect_git_cached(project, root, entry)
+        fresh = snapshot and snapshot["head_commit"] == current.head_commit and snapshot["dirty_fingerprint"] == current.dirty_fingerprint
+        info = {"index": snapshot, "head": current.head_commit, "branch": current.branch,
+                "freshness": ("fresh" if fresh else "stale") if snapshot else "unindexed"}
+        if view == "index":
+            return {**info, "active_job": self._store.get_active_job(str(project_id), str(worktree_id))}
+        if view == "tree":
+            data = await asyncio.to_thread(directory_page, root, path, entry.exclude, offset, 80)
+        elif view == "source":
+            data = await asyncio.to_thread(source_page, root, path, entry.exclude, line)
+        elif view == "outline":
+            safe_entry(root, path, entry.exclude)
+            data = await self._cbm.call_tool("get_file_outline", {"project": project, "file_path": path,
+                                             "limit": 60, "offset": offset, "format": "json"}, timeout=12)
+        else:
+            if not symbol.strip():
+                raise HTTPException(422, "Symbol required")
+            data = await self._cbm.call_tool("trace_path", {"project": project, "function_name": symbol,
+                "depth": depth, "direction": "both", "format": "json", "limit": 30,
+                "max_output_tokens": 2600, "include_tests": True, "include_evidence": True}, timeout=12)
+        return {**info, **data}
 
     def _row_to_job_response(self, row: dict[str, Any], *, deduplicated: bool = False) -> IndexJobResponse:
         return IndexJobResponse(

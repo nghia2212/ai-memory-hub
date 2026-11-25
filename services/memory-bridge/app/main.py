@@ -1,7 +1,9 @@
 """FastAPI + FastMCP ASGI entrypoint for Memory Bridge V1."""
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 from uuid import UUID
 
@@ -45,7 +47,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def bridge_lifespan(_app: FastAPI):
         db.initialize()
-        yield
+
+        async def sweep_leases():
+            while True:
+                await asyncio.sleep(15)
+                try:
+                    await asyncio.to_thread(db.reconcile_expired_leases)
+                except Exception:
+                    logging.getLogger(__name__).exception("Lease reconciliation failed")
+
+        sweeper = asyncio.create_task(sweep_leases())
+        try:
+            yield
+        finally:
+            sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweeper
 
     app = FastAPI(
         title="AI Memory Hub - Memory Bridge V1",
@@ -211,6 +228,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _: AuthPrincipal = Depends(require_admin),
     ) -> dict[str, Any]:
         return service.verify_memory(str(memory_id), req)
+
+    @app.get("/v1/context")
+    def project_context(project_id: UUID, worktree_id: UUID, _: AuthPrincipal = Depends(require_read)):
+        return service.get_project_context(str(project_id), str(worktree_id))
 
     # --- Events & Handoffs ---
     @app.get("/v1/events")

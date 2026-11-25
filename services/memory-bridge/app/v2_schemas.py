@@ -109,6 +109,7 @@ class PlanLifecycleRequest(StrictV2Model):
 
 
 class JobClaimRequest(StrictV2Model):
+    plan_id: UUID | None = None
     project_id: UUID
     worktree_id: UUID
     runner_id: str = Field(min_length=1, max_length=128)

@@ -5,7 +5,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -142,6 +142,13 @@ def create_app(
     @app.post("/v1/search/code", response_model=SearchCodeResponse, response_model_exclude_none=True)
     async def post_search_code(req: SearchCodeRequest, _auth=Depends(require_read)) -> SearchCodeResponse:
         return await service.search_code(req)
+
+    @app.get("/v1/explorer/{view}")
+    async def explore(view: Literal["tree", "source", "index", "outline", "graph"],
+                      project_id: UUID, worktree_id: UUID, path: str = Query("", max_length=512),
+                      symbol: str = Query("", max_length=512), offset: int = Query(0, ge=0, le=10000),
+                      line: int = Query(1, ge=1), depth: int = Query(1, ge=1, le=3), _auth=Depends(require_read)):
+        return await service.explore(project_id, worktree_id, view, path, symbol, offset, line, depth)
 
     @app.post("/mcp")
     async def mcp_endpoint(rpc: JsonRpcRequest, _auth=Depends(require_read)) -> JSONResponse:
