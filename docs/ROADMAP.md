@@ -30,3 +30,7 @@ Each agent uses a separate branch and PR, includes exact test commands/results a
 ## V3 — Dynamic MCP & Conversation History (planned)
 
 See [V3 implementation plan](v3/IMPLEMENTATION-PLAN.md), [V2.2.3 Stability & Security](v22/PATCH-3.md), and [V2.2.4 Execution Map & Telemetry](v22/PATCH-4.md). **V2.2.4** là bước hoàn thiện observability (Unified Execution Workspace, execution sequence, multi-level summary, Token Telemetry Collector & Inspector) trước khi triển khai **M1 — Coding Execution Engine**. M0 requires actual Hub telemetry before feature development. Prefer Dashboard plan/approval/dispatch when the runner supports the intended operation; otherwise register the external IDE session and trace honestly. Do not dispatch write work through a read-only runner or bypass policy. No main merge without approval.
+
+## V3.1 — Business Workspace & Dynamic MCP Platform
+
+See [V3.1 Implementation Plan](v31/IMPLEMENTATION-PLAN.md), [V3.1 Status](v31/STATUS.md), [MCP Catalog](v31/MCP-CATALOG.md), [Business Workspace](v31/BUSINESS-WORKSPACE.md), [MCP Gateway](v31/MCP-GATEWAY.md), [Security](v31/SECURITY.md), [Windows Setup](v31/WINDOWS-SETUP.md), and [Acceptance Test](v31/ACCEPTANCE-TEST.md). Branch: `feature/v31-business-mcp-platform` (Schema v8 additive, no main merge without approval).

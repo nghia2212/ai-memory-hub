@@ -20,6 +20,8 @@ def _materialize_path(path: str) -> str:
         .replace("{job_id}", uid)
         .replace("{server_id}", uid)
         .replace("{conv_id}", uid)
+        .replace("{business_id}", uid)
+        .replace("{revision}", "1")
         .replace("{task_id}", "V3-M1")
         .replace("{view}", "index")
         .replace("{action}", "approve")
