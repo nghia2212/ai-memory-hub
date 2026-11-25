@@ -1,0 +1,97 @@
+name: ai-memory-hub
+services:
+  codebase:
+    build: ./services/codebase
+    mem_limit: 1536m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8081"
+      SERVICE_NAME: codebase
+    networks: [core]
+    ports:
+      - "127.0.0.1:${CODEBASE_PORT:-8081}:8081"
+    volumes:
+      - code-index:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  memory-bridge:
+    build: ./services/memory-bridge
+    mem_limit: 512m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8082"
+      SERVICE_NAME: memory-bridge
+    networks: [core]
+    ports:
+      - "127.0.0.1:${BRIDGE_PORT:-8082}:8082"
+    volumes:
+      - memory-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  dashboard:
+    build: ./services/dashboard
+    mem_limit: 256m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8080"
+      SERVICE_NAME: dashboard
+      BRIDGE_URL: http://memory-bridge:8082
+      CODEBASE_URL: http://codebase:8081
+    networks: [core]
+    ports:
+      - "127.0.0.1:${HUB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  hermes:
+    build: ./services/hermes
+    mem_limit: 1024m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8083"
+      SERVICE_NAME: hermes
+    networks: [core, provider]
+    profiles: [hermes]
+    volumes:
+      - hermes-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8083/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+networks:
+  core:
+    internal: true
+  provider: {}
+volumes:
+  code-index: {}
+  memory-data: {}
+  hermes-data: {}
