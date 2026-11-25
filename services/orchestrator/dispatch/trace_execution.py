@@ -19,8 +19,8 @@ def build_execution_trace(job, started, ended, *, local=False, status, error_cod
             reported = data["model"][:200]
     except (ValueError,TypeError):
         pass
-    return dict(trace_id=ident,root_trace_id=ident,project_id=job["project_id"],
-                worktree_id=job["worktree_id"],step_type="local_rule" if local else "agent_step",
+    return dict(trace_id=ident,root_trace_id=job.get("root_trace_id") or ident, parent_trace_id=parent if job.get("root_trace_id") else None, project_id=job["project_id"],
+                worktree_id=job["worktree_id"],plan_id=job.get("plan_id"),task_id=job.get("task_id"),attempt_id=attempt,session_id=job["session_id"],step_type="local_rule" if local else "agent_step",
                 step_name="deterministic_rules" if local else "cli_execution",
                 actor_type="system" if local else "agent",provider=job.get("provider"),
                 model_id=reported,used_llm=False if local else None,
