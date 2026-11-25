@@ -26,3 +26,7 @@ All items below are planned, not completed.
 5. Lead: freeze interfaces, review PRs, integrate, run build and Docker smoke tests on Windows, then proceed to P1. Do not merge untested components as production-ready.
 
 Each agent uses a separate branch and PR, includes exact test commands/results and notes any unverified upstream assumptions. Never expose API keys or private project code in logs, fixtures or commits.
+
+## V3 — Dynamic MCP & Conversation History (planned)
+
+See [V3 implementation plan](v3/IMPLEMENTATION-PLAN.md). M0 requires actual Hub telemetry before feature development. Prefer Dashboard plan/approval/dispatch when the runner supports the intended operation; otherwise register the external IDE session and trace honestly. V2.2 acceptance remains partial. Do not dispatch write work through a read-only runner or bypass policy. No main merge without approval.
