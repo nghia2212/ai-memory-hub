@@ -40,7 +40,7 @@ class TraceEvent(BaseModel):
     task_id: UUID | None = None
     attempt_id: UUID | None = None
     session_id: UUID | None = None
-    step_type: Literal["user_task","planner","agent_step","mcp_tool_call","ai_memory","llm_call","code_search","qa_test","error","handoff","save_memory","local_rule"]
+    step_type: Literal["user_task","planner","agent_step","mcp_tool_call","ai_memory","llm_call","code_search","qa_test","error","handoff","save_memory","local_rule","session_usage"]
     step_name: str = Field(min_length=1,max_length=200)
     actor_type: Literal["user","planner","memory","mcp","agent","model","qa","system"]
     actor_id: str | None = Field(default=None,max_length=200)
@@ -87,7 +87,7 @@ class TraceEvent(BaseModel):
             raise ValueError("Cyclic trace")
         if self.status == "running" and self.ended_at is not None:
             raise ValueError("Running trace cannot have end time")
-        allowed = {"evidence_ref","source","why","retry_of","memory_id","handoff_id","test_evidence_ref","code_path","coverage"}
+        allowed = {"evidence_ref","source","why","retry_of","memory_id","handoff_id","test_evidence_ref","code_path","coverage","usage_scope","measurement_kind","requested_model","reported_model","auth_mode"}
         if set(self.metadata_json) - allowed or any(len(str(v)) > 1000 for v in self.metadata_json.values()):
             raise ValueError("Unsupported or oversized evidence metadata")
         if not self.metadata_json.get("source"):
