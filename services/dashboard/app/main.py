@@ -206,6 +206,23 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 content={"error": {"code": "bridge_unavailable", "message": "Memory Bridge unavailable"}},
             )
 
+    @app.get("/execution-map.js")
+    def execution_map_js():
+        return Response(Path(__file__).with_name("execution-map.js").read_bytes(), media_type="application/javascript")
+
+    @app.get("/api/v2/traces")
+    async def api_traces(request: Request):
+        if not verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret):
+            raise HTTPException(401, "Session required")
+        allowed = {"project_id","worktree_id","plan_id","task_id","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset"}
+        return await _proxy_bridge("GET","/v2/traces",params={k:v for k,v in request.query_params.items() if k in allowed})
+
+    @app.get("/api/v2/traces/{trace_id}")
+    async def api_trace_detail(trace_id: UUID, project_id: UUID, request: Request):
+        if not verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret):
+            raise HTTPException(401, "Session required")
+        return await _proxy_bridge("GET",f"/v2/traces/{trace_id}",params={"project_id":str(project_id)})
+
     @app.get("/workbench.js")
     def workbench_js():
         return Response(Path(__file__).with_name("workbench.js").read_bytes(), media_type="application/javascript")
