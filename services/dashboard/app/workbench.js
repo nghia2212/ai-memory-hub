@@ -44,7 +44,7 @@
     const panel=el("div",null,"card");panel.append(el("h3","Chỉnh revision (chưa phê duyệt)"),el("p","Tạm dừng tự cập nhật cho đến khi Lưu hoặc Hủy."));
     for(const t of tasks){
       const title=el("input");title.value=t.title;title.maxLength=200;title.oninput=()=>t.title=title.value;
-      const objective=el("textarea");objective.value=t.objective;objective.maxLength=4000;objective.oninput=()=>t.objective=objective.value;
+      const objective=el("textarea");objective.value=t.objective;objective.maxLength=32000;objective.oninput=()=>t.objective=objective.value;
       const model=el("select");for(const m of models){const o=el("option",m.provider+" / "+m.model_id+" — "+({exhausted:"Hết quota",observed_available:"Có hạn mức (đã ghi nhận)",unknown:"Quota chưa rõ"}[m.quota?.state]||"Quota chưa rõ"));o.disabled=m.quota?.state==="exhausted";o.value=JSON.stringify([m.provider,m.model_id]);model.append(o);}
       const current=JSON.stringify([t.assigned_provider,t.assigned_model_id]);if(!Array.from(model.options).some(o=>o.value===current)){const o=el("option",t.assigned_provider+" / "+t.assigned_model_id+" (không có trong catalog)");o.value=current;model.append(o);}model.value=current;
       model.onchange=()=>{const [provider,id]=JSON.parse(model.value);t.assigned_agent=provider;t.assigned_provider=provider;t.assigned_model_id=id;t.assigned_effort=null;};
@@ -58,7 +58,7 @@
   async function explorer(view,args={}){const s=scope("code");if(!s.project_id||!s.worktree_id)throw Error("Chọn project và worktree");return apiFetch("/api/explorer/"+view+"?"+qs({...s,...args}));}
   function indexMeta(d){fields($("index-meta"),[["Nhánh",d.branch],["HEAD hiện tại",d.head],["Index",d.freshness],["Nodes",d.index?.nodes],["Edges",d.index?.edges],["Commit đã index",d.index?.head_commit]]);}
   async function openTree(path="",offset=0){const epoch=++treeEpoch;const d=await explorer("tree",{path,offset});if(epoch!==treeEpoch)return;treePath=path;treeOffset=offset;indexMeta(d);$("tree-path").textContent=path||"/";const box=$("tree-files");box.replaceChildren();if(path)box.append(button("↑ Thư mục cha",()=>openTree(path.split("/").slice(0,-1).join("/"))));if(offset>0)box.append(button("Trang trước",()=>openTree(path,Math.max(0,offset-80))));for(const item of d.items||[]){const b=button((item.kind==="directory"?"📁 ":"")+item.path.split("/").pop(),()=>item.kind==="directory"?openTree(item.path):openSource(item.path));b.classList.add("tree-item");box.append(b);}if(d.next_offset!=null)box.append(button("Trang sau",()=>openTree(path,d.next_offset)));}
-  async function openSource(path,line=1){const epoch=++sourceEpoch;const d=await explorer("source",{path,line});if(epoch!==sourceEpoch)return;sourcePath=path;sourceLine=line;indexMeta(d);$("source-title").textContent=path;$("source-text").textContent=(d.lines||[]).map((s,i)=>String(line+i).padStart(5)+"  "+s).join("\n");$("symbol-list").replaceChildren();$("call-graph").replaceChildren();const a=$("source-actions");a.replaceChildren(button("Trang trước",()=>openSource(path,Math.max(1,line-80))),button("Trang sau",()=>openSource(path,line+80)),button("Outline",async()=>{const o=await explorer("outline",{path});if(epoch===sourceEpoch)renderEvidence($("symbol-list"),o,"Outline từ CBM");}),button("Giao việc với file này",()=>{const s=scope("code");$("plans-proj").value=s.project_id;syncWorktrees("plans-proj","plans-wt");$("plans-wt").value=s.worktree_id;$("plan-objective").value="Phân tích file "+path+" (chỉ đọc). ";showTab("plans",document.querySelector("nav button:nth-child(2)"));$("plan-objective").focus();}));}
+  async function openSource(path,line=1){const epoch=++sourceEpoch;const d=await explorer("source",{path,line});if(epoch!==sourceEpoch)return;sourcePath=path;sourceLine=line;indexMeta(d);$("source-title").textContent=path;$("source-text").textContent=(d.lines||[]).map((s,i)=>String(line+i).padStart(5)+"  "+s).join("\n");$("symbol-list").replaceChildren();$("call-graph").replaceChildren();const a=$("source-actions");a.replaceChildren(button("Trang trước",()=>openSource(path,Math.max(1,line-80))),button("Trang sau",()=>openSource(path,line+80)),button("Outline",async()=>{const o=await explorer("outline",{path});if(epoch===sourceEpoch)renderEvidence($("symbol-list"),o,"Outline từ CBM");}),button("Giao việc với file này",()=>{const s=scope("code");$("plans-proj").value=s.project_id;syncWorktrees("plans-proj","plans-wt");$("plans-wt").value=s.worktree_id;$("plan-objective").value="Phân tích file "+path+" (chỉ đọc). ";showTab("plans",document.querySelector("nav button:nth-child(2)"));$("plan-objective").dispatchEvent(new Event("input"));$("plan-objective").focus();}));}
   function renderEvidence(target,data,label){target.replaceChildren(el("h3",label),el("p","Quan hệ phân tích tĩnh từ upstream; không đảm bảo đầy đủ runtime."));if(label==="Trace / Impact")drawTrace(target,data);const obj={...data};delete obj.index;delete obj.head;delete obj.branch;delete obj.freshness;const rows=[];function walk(v,path,depth){if(rows.length>=150)return;if(v===null||typeof v!=="object"||depth>=5){rows.push([path,typeof v==="object"?JSON.stringify(v).slice(0,500):v]);return;}Object.entries(v).forEach(([k,x])=>walk(x,path?path+" / "+k:k,depth+1));}walk(obj,"",0);table(target.appendChild(el("div")),["Bằng chứng","Giá trị"],rows);target.append(button("Xuất JSON",()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(obj,null,2)],{type:"application/json"}));const a=el("a");a.href=url;a.download="codebase-evidence.json";a.click();URL.revokeObjectURL(url);}));}
   function drawTrace(target,data){
     const edges=data.graph_edges||[];
@@ -111,6 +111,42 @@
   window.loadMetrics=loadUsage;
   window.openTraceSource=(path,line=1)=>openSource(path,line);
   function resetExplorer(){++treeEpoch;++sourceEpoch;sourcePath="";sourceLine=1;syncCompare();$("tree-files").replaceChildren();$("source-text").textContent="";$("symbol-list").replaceChildren();$("call-graph").replaceChildren();$("index-meta").replaceChildren();$("source-actions").replaceChildren();}
+  function setupPromptEditor(){
+    const editor=$("plan-objective"), count=$("plan-char-count"), info=$("plan-draft-state"), file=$("plan-file"), submit=$("plan-submit");
+    const scopeKey=()=> "aihub:v222:draft:"+$("plans-proj").value+":"+$("plans-wt").value;
+    let key=scopeKey(), busy=false;
+    function update(save=true){
+      const n=Array.from(editor.value).length;
+      count.textContent=n.toLocaleString("vi-VN")+" / 32.000 ký tự";
+      count.classList.toggle("warn",n>32000);submit.disabled=n>32000;
+      if(save){try{if(editor.value)sessionStorage.setItem(key,editor.value);else sessionStorage.removeItem(key);info.textContent=editor.value?"Bản nháp trong tab trình duyệt":"Chưa có bản nháp";}catch(e){info.textContent="Không thể lưu bản nháp trong trình duyệt";}}
+    }
+    function restore(){
+      key=scopeKey();
+      try{editor.value=sessionStorage.getItem(key)||"";info.textContent=editor.value?"Đã khôi phục bản nháp":"Chưa có bản nháp";}catch(e){editor.value="";info.textContent="Không thể khôi phục bản nháp";}
+      update(false);
+    }
+    editor.addEventListener("input",()=>update());
+    for(const id of ["plans-proj","plans-wt"])$(id).addEventListener("change",()=>{update();restore();});
+    $("plan-clear").addEventListener("click",()=>{if(confirm("Xóa bản nháp hiện tại?")){editor.value="";update();}});
+    $("plan-expand").addEventListener("click",()=>{const open=editor.classList.toggle("prompt-expanded");$("plan-expand").textContent=open?"Thu gọn soạn thảo":"Mở rộng soạn thảo";editor.focus();});
+    editor.addEventListener("keydown",e=>{if(e.key==="Escape"&&editor.classList.contains("prompt-expanded")){$("plan-expand").click();}});
+    $("plan-import").addEventListener("click",()=>file.click());
+    file.addEventListener("change",async()=>{
+      const f=file.files?.[0];file.value="";if(!f||busy)return;
+      if(!/\.(txt|md|markdown)$/i.test(f.name)||f.size>256000){toast("Chỉ hỗ trợ TXT/MD tối đa 256 KB.");return;}
+      const originalKey=key, originalValue=editor.value;busy=true;
+      try{
+        const content=new TextDecoder("utf-8",{fatal:true}).decode(await f.arrayBuffer());
+        if(content.includes("\u0000"))throw Error("File không phải văn bản UTF-8.");
+        if(key!==originalKey||editor.value!==originalValue)throw Error("Bản nháp đã thay đổi; vui lòng nhập lại file.");
+        const combined=editor.value+(editor.value?"\n\n":"")+content;
+        if(Array.from(combined).length>32000)throw Error("Tổng prompt vượt 32.000 ký tự; không nhập phần bị cắt.");
+        if(confirm("Nối nội dung file vào prompt? Không nhập secrets hoặc dữ liệu riêng tư.")){editor.value=combined;update();editor.focus();}
+      }catch(e){toast(e.message);}finally{busy=false;}
+    });
+    restore();
+  }
   function onTab(name){if(name==="agents")refreshAgents();if(name==="plans")refreshPlans();if(name==="code"){syncCompare();openTree().catch(e=>{$("tree-files").textContent=e.message;});}if(name==="metrics")loadUsage();if(name==="brain")loadBrainPanel();if(name==="sessions")loadSessions();if(name==="catalog")loadCatalog();if(name==="backup")loadBackups();if(name==="events")loadEvents();if(name==="memory")loadMemories();}
-  window.addEventListener("hub-ready",()=>{ $("nav-toggle").addEventListener("click",()=>{const hidden=document.body.classList.toggle("nav-hidden");$("nav-toggle").setAttribute("aria-expanded",String(!hidden));});$("agent-refresh").addEventListener("click",refreshAgents);$("agents-proj").addEventListener("change",()=>{agentRows=[];drawAgents();$("agent-detail").replaceChildren();refreshAgents();});$("agent-filter").addEventListener("input",drawAgents);$("history-filter").addEventListener("input",drawHistory);$("tree-root").addEventListener("click",()=>openTree().catch(e=>toast(e.message)));for(const id of ["code-proj","code-wt"])$(id).addEventListener("change",()=>{resetExplorer();openTree().catch(e=>toast(e.message));});$("compare-run").addEventListener("click",()=>compareWorktrees().catch(e=>{$("compare-result").textContent=e.message;}));$("graph-run").addEventListener("click",async()=>{const epoch=sourceEpoch;try{const symbol=$("graph-symbol").value.trim();if(!symbol)return;const d=await explorer("graph",{symbol,depth:Number($("graph-depth").value)});if(epoch===sourceEpoch)renderEvidence($("call-graph"),d,"Trace / Impact");}catch(e){$("call-graph").textContent=e.message;}});$("metrics-proj").addEventListener("change",loadUsage);window.addEventListener("hub-tab",e=>onTab(e.detail));setInterval(()=>{if(document.hidden)return;if($("tab-agents").classList.contains("active"))refreshAgents();if($("tab-plans").classList.contains("active"))refreshPlans();},15000);});
+  window.addEventListener("hub-ready",()=>{ setupPromptEditor();$("nav-toggle").addEventListener("click",()=>{const hidden=document.body.classList.toggle("nav-hidden");$("nav-toggle").setAttribute("aria-expanded",String(!hidden));});$("agent-refresh").addEventListener("click",refreshAgents);$("agents-proj").addEventListener("change",()=>{agentRows=[];drawAgents();$("agent-detail").replaceChildren();refreshAgents();});$("agent-filter").addEventListener("input",drawAgents);$("history-filter").addEventListener("input",drawHistory);$("tree-root").addEventListener("click",()=>openTree().catch(e=>toast(e.message)));for(const id of ["code-proj","code-wt"])$(id).addEventListener("change",()=>{resetExplorer();openTree().catch(e=>toast(e.message));});$("compare-run").addEventListener("click",()=>compareWorktrees().catch(e=>{$("compare-result").textContent=e.message;}));$("graph-run").addEventListener("click",async()=>{const epoch=sourceEpoch;try{const symbol=$("graph-symbol").value.trim();if(!symbol)return;const d=await explorer("graph",{symbol,depth:Number($("graph-depth").value)});if(epoch===sourceEpoch)renderEvidence($("call-graph"),d,"Trace / Impact");}catch(e){$("call-graph").textContent=e.message;}});$("metrics-proj").addEventListener("change",loadUsage);window.addEventListener("hub-tab",e=>onTab(e.detail));setInterval(()=>{if(document.hidden)return;if($("tab-agents").classList.contains("active"))refreshAgents();if($("tab-plans").classList.contains("active"))refreshPlans();},15000);});
 })();
