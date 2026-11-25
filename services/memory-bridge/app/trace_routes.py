@@ -1,12 +1,22 @@
 """Scoped, authenticated execution trace ingestion and read API."""
+import csv
+import io
 import json
 import os
 import hmac
 from uuid import UUID
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import Response
 from .trace_schema import TraceEvent
 from .trace_metrics import summarize
+from .trace_summary import (
+    build_group_summaries,
+    build_project_summary,
+    build_telemetry_inspector,
+    compute_global_sequence_map,
+    enrich_trace_items,
+)
 from .security import authenticate_token, extract_bearer_token, require_any_scope, require_scope, redact_payload, compute_payload_hash
 from .errors import BridgeError
 
@@ -139,12 +149,78 @@ def create_trace_router(db, cfg):
             check_scope(conn,project,str(worktree_id) if worktree_id else None)
             total = conn.execute("SELECT COUNT(*) FROM v22_execution_traces WHERE "+where,args).fetchone()[0]
             rows = conn.execute("SELECT * FROM v22_execution_traces WHERE "+where+" ORDER BY "+order+" LIMIT ? OFFSET ?",args+[limit,offset]).fetchall()
-            items = [decode(r) for r in rows]
+            raw_items = [decode(r) for r in rows]
             # Bound aggregate scans; label partial results explicitly.
-            sample = conn.execute("SELECT * FROM v22_execution_traces WHERE "+where+" ORDER BY started_at,trace_id LIMIT 5000",args).fetchall()
-            metrics = summarize(decode(r) for r in sample)
+            sample_rows = conn.execute("SELECT * FROM v22_execution_traces WHERE "+where+" ORDER BY started_at,trace_id LIMIT 5000",args).fetchall()
+            sample = [decode(r) for r in sample_rows]
+            metrics = summarize(sample)
             metrics["partial"] = total > len(sample)
-            return {"items":items,"total":total,"next_offset":offset+limit if offset+limit<total else None,"metrics":metrics}
+
+            seq_map, ing_map, tie_ts = compute_global_sequence_map(conn, project)
+            summary, planned_steps, dep_edges = build_project_summary(
+                conn,
+                project_id=project,
+                worktree_id=str(worktree_id) if worktree_id else None,
+                plan_id=str(plan_id) if plan_id else None,
+                session_id=str(session_id) if session_id else None,
+                rows=sample,
+                metrics=metrics,
+            )
+            enriched_sample = enrich_trace_items(sample, seq_map, ing_map, tie_ts, dep_edges)
+            items = enrich_trace_items(raw_items, seq_map, ing_map, tie_ts, dep_edges)
+            groups = build_group_summaries(enriched_sample)
+            return {
+                "items": items,
+                "total": total,
+                "next_offset": offset + limit if offset + limit < total else None,
+                "metrics": metrics,
+                "summary": summary,
+                "groups": groups,
+                "planned_steps": planned_steps,
+            }
+
+    @router.get("/export")
+    def export_traces(
+        project_id: UUID,
+        worktree_id: UUID | None = None,
+        session_id: UUID | None = None,
+        plan_id: UUID | None = None,
+        task_id: UUID | None = None,
+        status: str | None = None,
+        fmt: str = Query("json", alias="format", pattern=r"^(json|csv)$"),
+        limit: int = Query(500, ge=1, le=2000),
+        p=Depends(reader),
+    ):
+        project = str(project_id)
+        filters = {"project_id": project, "worktree_id": worktree_id, "session_id": session_id, "plan_id": plan_id, "task_id": task_id, "status": status}
+        clauses, args = [], []
+        for k, v in filters.items():
+            if v is not None:
+                clauses.append(k + "=?")
+                args.append(str(v))
+        where = " AND ".join(clauses)
+        with db.read_conn() as conn:
+            check_scope(conn, project, str(worktree_id) if worktree_id else None)
+            rows = conn.execute("SELECT * FROM v22_execution_traces WHERE " + where + " ORDER BY started_at,trace_id LIMIT ?", args + [limit]).fetchall()
+            raw_items = [decode(r) for r in rows]
+            seq_map, ing_map, tie_ts = compute_global_sequence_map(conn, project)
+            items = enrich_trace_items(raw_items, seq_map, ing_map, tie_ts, {})
+        if fmt == "csv":
+            buf = io.StringIO()
+            cols = ["execution_sequence", "trace_id", "step_name", "step_type", "lane", "actor_id", "provider", "model_id", "status", "started_at", "ended_at", "duration_ms", "input_tokens", "output_tokens", "cache_read_tokens", "cost_usd", "token_status"]
+            writer_csv = csv.DictWriter(buf, fieldnames=cols)
+            writer_csv.writeheader()
+            for it in items:
+                writer_csv.writerow({c: it.get(c) for c in cols})
+            return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8")
+        return {"project_id": project, "count": len(items), "items": items}
+
+    @router.get("/telemetry/inspector")
+    def telemetry_inspector(project_id: UUID, worktree_id: UUID | None = None, p=Depends(reader)):
+        project = str(project_id)
+        with db.read_conn() as conn:
+            check_scope(conn, project, str(worktree_id) if worktree_id else None)
+            return build_telemetry_inspector(conn, project, str(worktree_id) if worktree_id else None)
 
     @router.get("/{trace_id}")
     def detail(trace_id: UUID, project_id: UUID, p=Depends(reader)):

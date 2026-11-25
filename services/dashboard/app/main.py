@@ -225,6 +225,28 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         allowed = {"project_id","worktree_id","plan_id","task_id","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
         return await _proxy_bridge("GET","/v2/traces",params={k:v for k,v in request.query_params.items() if k in allowed})
 
+    @app.get("/api/v2/traces/export")
+    async def api_traces_export(request: Request):
+        _require_session(request)
+        allowed = {"project_id", "worktree_id", "plan_id", "task_id", "session_id", "status", "format", "limit"}
+        params = {k: v for k, v in request.query_params.items() if k in allowed}
+        fmt = params.get("format", "json")
+        if fmt == "csv":
+            headers = {"Authorization": f"Bearer {cfg.bridge_read_token}"} if cfg.bridge_read_token else {}
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(f"{cfg.bridge_url.rstrip('/')}/v2/traces/export", headers=headers, params=params)
+                    return Response(content=resp.content, status_code=resp.status_code, media_type="text/csv; charset=utf-8")
+            except httpx.HTTPError:
+                return JSONResponse(status_code=503, content={"error": {"code": "bridge_unavailable", "message": "Memory Bridge unavailable"}})
+        return await _proxy_bridge("GET", "/v2/traces/export", params=params)
+
+    @app.get("/api/v2/traces/telemetry/inspector")
+    async def api_telemetry_inspector(request: Request):
+        _require_session(request)
+        allowed = {"project_id", "worktree_id"}
+        return await _proxy_bridge("GET", "/v2/traces/telemetry/inspector", params={k: v for k, v in request.query_params.items() if k in allowed})
+
     @app.get("/api/v2/traces/{trace_id}")
     async def api_trace_detail(trace_id: UUID, project_id: UUID, request: Request):
         _require_session(request)
