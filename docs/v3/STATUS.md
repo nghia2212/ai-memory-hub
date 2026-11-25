@@ -2,18 +2,19 @@
 
 Cập nhật: 2026-11-25
 Nhánh cơ sở: `lead/v21-development-workbench`
-Nhánh hiện tại: `fix/v223-stability-security`
+Nhánh V3: `feature/v3-dynamic-mcp-history` (kế thừa toàn bộ V2.2.3 & V2.2.4 từ `dc410b9`)
 
 | Milestone | Phạm vi | Trạng thái | Ghi chú |
 |---|---|---|---|
-| **M0** | Coding Execution Readiness Audit | **COMPLETED** | Session `23c9cb7d-2834-4699-a2f0-9a3d2e30ffa1`, Root Trace `63a3fdfa-32ef-4846-a5b3-4f6ddcb5f4e3`, Candidate Memory `01531082-aae6-4f4e-9122-d6d623e16491`, Handoff `V3-M1` `1831d0ca-917d-4df6-8fc3-ea55d9c29aa0`. |
-| **M0.5 / V2.2.3** | Stability & Security (Codebase MCP 503, Dashboard Auth/CSRF, Brain Config Gemini 4, Pre-approval Quota Guard, Long Prompt stdin) | **COMPLETED** | Commit `0c4dd7d`, 34/34 pytest PASS, Codebase 1.760 nodes / 6.634 edges. |
-| **V2.2.4** | Execution Map Workspace, Execution Order, Multi-level Summary, Token Telemetry Collector & Inspector | **IN_REVIEW** | Triển khai tiếp trên `fix/v223-stability-security`; bước hoàn thiện observability trước M1. |
-| **M1** | Coding Execution Engine (4 chế độ: Analysis, Coding, Testing, Git Delivery) | **PLANNED** | Chờ duyệt sau V2.2.4. |
-| **M2 / V3.0** | Dynamic MCP Registry & Scoped Routing | **PLANNED** | Chờ duyệt sau M1. |
-| **M3 / V3.1** | Conversation Collector (Claude, Codex, Antigravity) | **PLANNED** | Đã khảo sát định dạng JSONL thực tế ở M0. |
-| **M4 / V3.2** | Conversation Storage & Dashboard UI | **PLANNED** | Migration v6 additive. |
-| **M5 / V3.3** | Conversation Search (FTS5) & Recovery | **PLANNED** | 0 LLM cho tìm kiếm. |
-| **M6 / V3.4** | Unified Execution Trace | **PLANNED** | Tái sử dụng 4 views Bản đồ thực thi. |
-| **M7 / V3.5** | Context Optimization & Token Benchmark | **PLANNED** | Đo đối chứng thực tế trước khi công bố. |
-| **M8–M9** | Integration, Security, Windows QA & Delivery | **PLANNED** | Không merge `main` khi chưa duyệt. |
+| **M0** | Coding Execution Readiness Audit | **COMPLETED** | Session `23c9cb7d`, Root Trace `63a3fdfa`. |
+| **M0.5 / V2.2.3** | Stability & Security (Codebase MCP 503, Dashboard Auth/CSRF, Brain Config Gemini 4, Quota Guard, stdin) | **COMPLETED** | Commit `0c4dd7d`, 34/34 pytest PASS. |
+| **V2.2.4** | Execution Map Workspace, Summary đa cấp, Usage Collector & Async Reindex (`202`/dedupe/`504` vs `503`) | **COMPLETED** | Commit `dc410b9`, 38/38 pytest PASS, Playwright QA PASS. |
+| **M1** | Coding Execution Engine (4 chế độ: Analysis, Coding, Testing, Git Delivery) | **COMPLETED** | `services/orchestrator/dispatch/execution_engine.py` + unit tests trên isolated git repo. |
+| **M2 / V3.0** | Dynamic MCP Registry & Scoped Capability Routing | **COMPLETED** | Migration v5 (`v3_mcp_servers`, `v3_mcp_tools`, `v3_mcp_audit`), builtin seed, approval workflow, 0-LLM router, Dashboard Tab Dynamic MCP. |
+| **M3 / V3.1** | Conversation Collector (Antigravity, Claude Code, Codex CLI) | **COMPLETED** | `services/orchestrator/conversation_collector.py` (opt-in read-only, strip `thinking`/secrets, incremental cursor, dedupe). |
+| **M4 / V3.2** | Conversation Storage & Dashboard Lịch sử hội thoại AI | **COMPLETED** | Migration v6 (`v3_conversations`, `v3_conversation_messages`), 2-pane dark mode UI, pagination, export JSON/MD, delete CSRF. |
+| **M5 / V3.3** | Conversation FTS5 Search (tiếng Việt, 0 LLM) & Recovery | **COMPLETED** | `v3_conversation_messages_fts` (`unicode61`), bounded excerpts, promote excerpt → `candidate memory`. |
+| **M6 / V3.4** | Unified Execution Trace ↔ Conversation Linking | **COMPLETED** | Liên kết tường minh qua ID thực tế (`session_id`/`plan_id`/`task_id`), hiển thị `Unlinked` khi thiếu ID, nút điều hướng trực tiếp sang Bản đồ thực thi. |
+| **M7 / V3.5** | Selective Context Optimization & Honest Token Benchmark | **COMPLETED** | `services/orchestrator/context_pack.py` (budgeted dedupe pack chỉ dùng verified/approved sources + benchmark đo thật không bịa %). |
+| **M8** | Integration, Security, Migration v4→v6 & Windows QA | **COMPLETED** | Bảo toàn toàn bộ 38 test V2.2.4 + toàn bộ test V3 mới trong Docker cô lập; kiểm thử migration live không xóa volume. |
+| **M9** | Delivery (`Test-V3.ps1`, Docs, Push `feature/v3-dynamic-mcp-history`) | **IN_REVIEW** | Chờ người dùng review Draft PR & phê duyệt trước khi merge `main`. |
