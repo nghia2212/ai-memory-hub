@@ -96,6 +96,7 @@ class BrainConfigUpdateRequest(BrainPolicyConfig):
 
 class PlanRevisionUpdateRequest(StrictV2Model):
     project_id: UUID
+    expected_revision_id: UUID | None = None
     tasks: list[PlanTaskSpec] = Field(min_length=1, max_length=50)
     forecast_id: str | None = None
     planner_session_id: str | None = None

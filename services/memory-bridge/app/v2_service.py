@@ -949,6 +949,7 @@ class V2BridgeService:
             return {
                 **dict(plan),
                 "revisions": [dict(r) for r in revs],
+                "editable_tasks": json.loads(conn.execute("SELECT plan_json FROM v2_plan_revisions WHERE id=? AND plan_id=?", (plan["current_revision_id"], plan_id)).fetchone()["plan_json"]).get("tasks", []),
                 "tasks": [dict(t) for t in tasks],
                 "approvals": [dict(a) for a in approvals],
                 "dependencies": [dict(x) for x in conn.execute("SELECT d.task_id, d.depends_on_task_id FROM v2_task_dependencies d JOIN v2_tasks t ON t.id=d.task_id WHERE t.plan_id=? AND t.revision_id=?", (plan_id, plan["current_revision_id"]))],
@@ -993,6 +994,8 @@ class V2BridgeService:
             ).fetchone()
             if unresolved:
                 raise BridgeError(409, "unresolved_attempt", "Review active or unknown task outcomes before revising")
+            if req.expected_revision_id and str(req.expected_revision_id) != plan["current_revision_id"]:
+                raise BridgeError(409, "stale_revision", "Reload the current revision before editing")
             rev_hash = self._validate_dag_and_hash(plan["objective"], req.tasks)
             max_rev = conn.execute(
                 "SELECT COALESCE(MAX(revision_number), 0) AS n FROM v2_plan_revisions WHERE plan_id = ?",

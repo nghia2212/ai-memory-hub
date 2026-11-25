@@ -712,6 +712,34 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v2_plan_detail(plan_id: str, project_id: str) -> JSONResponse:
         return await _proxy_bridge("GET", f"/v2/plans/{plan_id}", params={"project_id": project_id})
 
+    @app.put("/api/v2/plans/{plan_id}/revisions")
+    async def revise_workbench_plan(plan_id: UUID, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        body = await request.json()
+        if not isinstance(body, dict) or not body.get("expected_revision_id"):
+            raise HTTPException(422, "Expected revision required")
+        project_id = str(UUID(str(body.get("project_id"))))
+        current = await _proxy_bridge("GET", f"/v2/plans/{plan_id}", params={"project_id": project_id})
+        if current.status_code != 200:
+            return current
+        detail = json.loads(current.body)
+        if detail["current_revision_id"] != body["expected_revision_id"]:
+            raise HTTPException(409, "Revision changed; reload")
+        tasks = body.get("tasks")
+        if not isinstance(tasks, list) or not 1 <= len(tasks) <= 50:
+            raise HTTPException(422, "Invalid tasks")
+        catalog = await _proxy_bridge("GET", "/v2/catalog")
+        if catalog.status_code != 200:
+            return catalog
+        cat = json.loads(catalog.body)
+        allowed = {(x.get("provider"), x.get("model_id")) for x in cat.get("models", []) if x.get("status") == "verified" and x.get("auth_mode") == "subscription_cli"}
+        if cat.get("is_stale") or any(not isinstance(t, dict) or t.get("auth_mode") != "subscription_cli" or (t.get("assigned_provider"), t.get("assigned_model_id")) not in allowed for t in tasks):
+            raise HTTPException(409, "Only verified subscription CLI models are allowed")
+        forecast = await _proxy_bridge("POST", "/v2/forecasts", planner=True, json_body={"project_id": project_id, "worktree_id": detail["worktree_id"], "tasks": tasks, "persist": True})
+        if forecast.status_code != 200:
+            return forecast
+        return await _proxy_bridge("PUT", f"/v2/plans/{plan_id}/revisions", planner=True, json_body={"project_id": project_id, "tasks": tasks, "expected_revision_id": body["expected_revision_id"], "forecast_id": json.loads(forecast.body)["forecast_id"], "created_by": "dashboard"})
+
     @app.post("/api/v2/plans/{plan_id}/{action}")
     async def api_v2_plan_action(plan_id: str, action: str, project_id: str, request: Request) -> JSONResponse:
         if action not in {"approve", "reject", "pause", "resume", "cancel"}:
