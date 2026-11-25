@@ -25,7 +25,7 @@ def create_trace_router(db, cfg):
         if token and dedicated and hmac.compare_digest(token,dedicated):
             return "trace_only"
         p = authenticate_token(token,cfg)
-        require_any_scope(p,"write","planner","runner")
+        require_any_scope(p,"write","planner","runner","worker")
         return p
 
     def check_scope(conn, project, worktree=None):
@@ -55,6 +55,12 @@ def create_trace_router(db, cfg):
         project, worktree = data["project_id"], data["worktree_id"]
         with db.write_tx() as conn:
             check_scope(conn, project, worktree)
+            if getattr(p,"role",None) == "worker":
+                if data["actor_id"] != "hermes" or data["step_type"] not in ("llm_call","local_rule") or any(data[k] is not None for k in ("plan_id","task_id","attempt_id","session_id","parent_trace_id")):
+                    raise BridgeError(403,"trace_role","Worker trace types only")
+                event_id = data["metadata_json"].get("evidence_ref")
+                if not event_id or not conn.execute("SELECT 1 FROM events WHERE id=? AND project_id=? AND worktree_id=? AND approved=1",(event_id,project,worktree)).fetchone():
+                    raise BridgeError(403,"trace_role","Approved event required")
             if p == "trace_only":
                 # Adapter may correlate only to an existing parent in its registered scope.
                 if data["step_type"] not in ("mcp_tool_call","local_rule") or data["actor_id"] != "codebase-adapter":
