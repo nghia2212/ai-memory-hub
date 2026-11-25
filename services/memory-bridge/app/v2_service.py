@@ -1532,14 +1532,16 @@ class V2BridgeService:
         now = utc_now_iso()
         with self.db.write_tx() as conn:
             self._ensure_worktree(conn, pid, wid)
-            existing = conn.execute("SELECT id, project_id FROM v2_sessions WHERE id = ?", (sid,)).fetchone()
+            existing = conn.execute("SELECT id, project_id, worktree_id, role, status, attempt_id FROM v2_sessions WHERE id = ?", (sid,)).fetchone()
             if existing:
-                if existing["project_id"] != pid:
+                if existing["project_id"] != pid or existing["worktree_id"] != wid or existing["role"] != req.role:
                     raise BridgeError(404, "session_not_found", "Session not found for project")
-                conn.execute(
-                    "UPDATE v2_sessions SET status = ?, ended_at = CASE WHEN ? != 'running' THEN ? ELSE ended_at END WHERE id = ?",
-                    (req.status, req.status, now, sid),
-                )
+                # A late hook must not reopen a completed session; managed lifecycle is lease-owned.
+                if existing["attempt_id"] is None and existing["status"] not in ("completed", "failed", "cancelled"):
+                    conn.execute(
+                        "UPDATE v2_sessions SET status = ?, ended_at = CASE WHEN ? != 'running' THEN ? ELSE NULL END, model_id = CASE WHEN model_id = 'unknown' THEN ? ELSE model_id END WHERE id = ?",
+                        (req.status, req.status, now, req.model_id, sid),
+                    )
             else:
                 conn.execute(
                     """

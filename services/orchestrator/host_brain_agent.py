@@ -110,7 +110,7 @@ def load_env_map(path: Path = ENV_PATH) -> dict[str, str]:
     return out
 
 
-def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25) -> tuple[int, str, str]:
+def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25, managed: bool = False) -> tuple[int, str, str]:
     exe = shutil.which(args[0])
     if not exe:
         return 127, "", f"CLI not found on PATH: {args[0]}"
@@ -125,6 +125,7 @@ def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25) -> t
             errors="replace",
             timeout=timeout,
             shell=False,
+            env={**os.environ, "AI_MEMORY_MANAGED_SESSION": "1"} if managed else None,
         )
         return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
     except subprocess.TimeoutExpired:
@@ -517,11 +518,11 @@ def execute_approved_plan(
         elif provider == "local" or model_id == "deterministic-rules":
             rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
         elif provider == "claude":
-            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id, prompt], cwd=cwd, timeout=90)
+            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
         elif provider == "codex":
-            rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, prompt], cwd=cwd, timeout=90)
+            rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
         elif provider == "agy" and auth_mode == "subscription_cli":
-            rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--output-format", "json", "--print", prompt], cwd=cwd, timeout=90)
+            rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--output-format", "json", "--print", prompt], cwd=cwd, timeout=90, managed=True)
         else:
             rc, out, err = 1, "", "Unsupported approved CLI adapter"
     finally:

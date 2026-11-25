@@ -16,6 +16,7 @@ from common import (
     match_registered_scope,
     read_hook_stdin,
     resolve_git_scope,
+    record_manual_session,
 )
 
 
@@ -52,12 +53,14 @@ def main(argv: list[str] | None = None) -> int:
                 print("{}")
             return 0
 
-        bridge_url, read_token, _ = load_bridge_settings()
+        bridge_url, read_token, write_token = load_bridge_settings()
         project_id, worktree_id = match_registered_scope(bridge_url, read_token, scope, timeout=1.5)
         if not project_id or not worktree_id:
             if args.format == "gemini":
                 print("{}")
             return 0
+
+        record_manual_session(bridge_url, write_token, scope, project_id, worktree_id, args.source_agent, stdin_data, "running")
 
         lines = [
             f"[AI Memory Hub | agent={args.source_agent}] branch={scope.branch} head={scope.head_commit[:10]} dirty={scope.dirty}",

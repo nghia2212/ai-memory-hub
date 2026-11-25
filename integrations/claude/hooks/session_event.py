@@ -17,6 +17,7 @@ from common import (
     match_registered_scope,
     read_hook_stdin,
     resolve_git_scope,
+    record_manual_session,
 )
 
 
@@ -50,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("{}")
             return 0
 
+        record_manual_session(bridge_url, write_token, scope, project_id, worktree_id,
+                              args.source_agent, stdin_data, "completed" if event_kind == "session_end" else "running")
         task_id = args.task_id or os.environ.get("AI_MEMORY_TASK_ID", "")
         ts = int(time.time())
         idem_seed = (

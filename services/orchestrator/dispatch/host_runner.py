@@ -143,6 +143,7 @@ class HostRunner:
             errors="replace",
             timeout=timeout,
             shell=False,
+            env={**os.environ, "AI_MEMORY_MANAGED_SESSION": "1"},
             check=False,
         )
         return proc.returncode, proc.stdout, proc.stderr

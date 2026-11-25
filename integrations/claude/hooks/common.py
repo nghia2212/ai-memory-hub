@@ -179,3 +179,28 @@ def match_registered_scope(
             if wt_path and os.path.normcase(os.path.normpath(wt_path)) == norm_worktree:
                 return pid, str(raw_wid)
     return None, None
+
+def record_manual_session(bridge_url: str, write_token: str, scope: GitScope,
+                          project_id: str, worktree_id: str, source_agent: str,
+                          payload: dict[str, Any], status: str) -> None:
+    """Metadata-only lifecycle; never reads transcript or guesses usage/model."""
+    import uuid
+    from urllib.parse import urlsplit
+    if os.environ.get("AI_MEMORY_MANAGED_SESSION") or not write_token:
+        return
+    if urlsplit(bridge_url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return
+    upstream = payload.get("session_id")
+    if not isinstance(upstream, str) or not upstream.strip() or len(upstream) > 512:
+        return
+    ref = hashlib.sha256(upstream.encode("utf-8")).hexdigest()
+    sid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-memory:{source_agent}:{project_id}:{worktree_id}:{ref}"))
+    model = payload.get("model")
+    if not isinstance(model, str) or not model or len(model) > 128:
+        model = "unknown"
+    http_json(f"{bridge_url}/v2/sessions", method="POST", token=write_token, timeout=1.0,
+              payload={"session_id": sid, "project_id": project_id, "worktree_id": worktree_id,
+                       "role": "manual_cli", "provider": source_agent, "model_id": model,
+                       "auth_mode": "unknown", "upstream_session_id": ref,
+                       "git_head": scope.head_commit[:64], "dirty_fingerprint": scope.dirty_fingerprint,
+                       "status": status, "unlinked": True, "incomplete_coverage": True})
