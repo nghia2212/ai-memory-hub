@@ -514,19 +514,26 @@ def execute_approved_plan(
         return {"ok": False, "job_id": job_id, "message": "Lease unavailable before CLI start"}
     worker = threading.Thread(target=keep_alive, daemon=True)
     worker.start()
+    trace_started = datetime.now(timezone.utc)
+    invoked = False
+    local = False
     try:
         cwd = effective_wt_path
         if not cwd or not Path(cwd).is_dir():
             rc, out, err = 1, "", "Registered worktree unavailable"
         elif provider == "local" or model_id == "deterministic-rules":
+            invoked = local = True
             rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
         elif auth_mode != "subscription_cli":
             rc, out, err = 1, "", "Non-subscription dispatch disabled"
         elif provider == "claude":
+            invoked = True
             rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
         elif provider == "codex":
+            invoked = True
             rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
         elif provider == "agy" and auth_mode == "subscription_cli":
+            invoked = True
             rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--output-format", "json", "--print", prompt], cwd=cwd, timeout=90, managed=True)
         else:
             rc, out, err = 1, "", "Unsupported approved CLI adapter"
@@ -534,6 +541,16 @@ def execute_approved_plan(
         stop.set()
         worker.join(timeout=6)
 
+    if invoked:
+        try:
+            from services.orchestrator.dispatch.trace_execution import build_execution_trace
+            payload = build_execution_trace(claim,trace_started,datetime.now(timezone.utc),local=local,
+                status="unknown" if lost.is_set() else ("succeeded" if rc==0 else "failed"),
+                error_code=None if rc==0 else f"cli_exit_{rc}",stdout=out)
+            if payload:
+                _bridge_request(env,"POST","/v2/traces",token_key="BRIDGE_RUNNER_TOKEN",body=payload)
+        except Exception:
+            pass
     if lost.is_set():
         return {"ok": False, "job_id": job_id, "session_id": session_id, "message": "Heartbeat lost; outcome unknown. Inspect before retry."}
     duration_ms = int((time.perf_counter() - t0) * 1000)
