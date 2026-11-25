@@ -365,10 +365,12 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return await _proxy_bridge("GET", f"/v1/projects/{project_id}/worktrees")
 
     @app.get("/api/memories")
-    async def api_memories(project_id: str, state: str = "") -> JSONResponse:
+    async def api_memories(project_id: str, state: str = "", worktree_id: str | None = None) -> JSONResponse:
         params: dict[str, Any] = {"project_id": project_id}
         if state:
             params["state"] = state
+        if worktree_id:
+            params["worktree_id"] = worktree_id
         return await _proxy_bridge("GET", "/v1/memories", params=params)
 
     @app.get("/api/events")
