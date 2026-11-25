@@ -71,7 +71,14 @@ def build_cli_command(
     if not exe:
         raise UnsafeCLIRequestError(f"CLI executable '{cli_family}' not found on PATH.")
 
-    bounded_prompt = prompt.strip()[:4000]
+    bounded_prompt = prompt.strip()
+    if len(bounded_prompt) > 32000:
+        raise UnsafeCLIRequestError("Prompt exceeds 32000 characters; split the task.")
+    # Windows launch limits apply to quoted UTF-16 command lines, especially .cmd wrappers.
+    import os
+    import subprocess
+    if os.name == "nt" and len(subprocess.list2cmdline([exe, model_id, bounded_prompt]).encode("utf-16-le")) // 2 > (7000 if exe.lower().endswith((".cmd", ".bat")) else 30000):
+        raise UnsafeCLIRequestError("Prompt exceeds safe Windows CLI argument size; split the task or use a verified stdin adapter.")
     if not bounded_prompt:
         raise UnsafeCLIRequestError("Prompt must be non-empty.")
 
