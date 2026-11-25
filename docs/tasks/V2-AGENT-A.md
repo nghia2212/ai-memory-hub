@@ -3,3 +3,7 @@ Start after Lead freezes V1 integration SHA and V2 contracts. Branch agent/v2-mo
 
 ## Extension: forecasting
 Own services/orchestrator/forecast/** and tests/orchestrator/forecast/**. Implement complexity rubric, cohort selection, cold start, P50/P90, plan aggregation, forecast calibration/drift, quota-unit compatibility and alternative model forecasts per docs/SESSION-ANALYTICS-V2.md. Use only pre-execution features and measured samples; no LLM or fake data. Coordinate B/C schema.
+
+
+## Adaptive brain extension
+Read docs/ADAPTIVE-BRAIN-V2.md. Verify preferred labels against official catalogs and supported runner/account capability; implement brain role eligibility/routing, configurable ranking and measured quality/cost comparison. No fabricated IDs or benchmark scores. Coordinate adapter capability contract with C.

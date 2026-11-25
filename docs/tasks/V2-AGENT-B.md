@@ -3,3 +3,7 @@ Start after Lead freezes V1 integration SHA and V2 contracts. Branch agent/v2-ob
 
 ## Extension: session analytics
 Implement session ledger, features/outcomes, forecast snapshots/actuals, retention/deletion, consent, scoped APIs and dashboard history/cohort/forecast views per docs/SESSION-ANALYTICS-V2.md. Atomic budget reservations, dedup cumulative counters and unknown quota UX. Test persistence and isolation.
+
+
+## Adaptive brain extension
+Read docs/ADAPTIVE-BRAIN-V2.md. Add audited role configuration, effective vs preferred model, planner session/forecast metrics and separate planner/executor totals; Vietnamese dashboard 'Bộ não điều phối', availability and fallback reasons, approval/budget controls and unknown quota display.

@@ -3,3 +3,7 @@ Start after Lead freezes V1 integration SHA and V2 contracts. Branch agent/v2-or
 
 ## Extension: session telemetry and plan forecasts
 Capture authorized CLI session metadata, exact model/effort/auth mode, measured counters and quota snapshots where supported; distinguish delta/cumulative, retries, failures and missing metrics. Integrate forecast into immutable preapproval plan and checkpoints, reconcile actual outcomes and budget reservations. No raw transcript default. See docs/SESSION-ANALYTICS-V2.md.
+
+
+## Adaptive brain extension
+Read docs/ADAPTIVE-BRAIN-V2.md. Implement provider-neutral BrainAdapter with supported host CLI discovery and optional approved API adapters, structured bounded planning, deterministic gate, fallback/escalation caps and telemetry. Verify whether Antigravity menu models have a supported noninteractive interface; if not, report unavailable and propose verified alternatives, no private endpoint or credential extraction. Do not assume Neon integration.

@@ -16,3 +16,6 @@ Synthetic benchmark fixtures and fake CLI adapters; test new/deprecated/stale/un
 
 ## Mandatory session analytics and forecasting
 See [SESSION-ANALYTICS-V2.md](SESSION-ANALYTICS-V2.md) for durable session history, complexity cohorts, token/quota forecasts before approval, calibration and privacy. This is a required V2 acceptance gate.
+
+## Adaptive brain policy (mandatory)
+See [ADAPTIVE-BRAIN-V2.md](ADAPTIVE-BRAIN-V2.md). Replace single-provider planner assumptions with verified provider-neutral brain adapters and owner-configurable tier routing. Neon Medium is preferred display label, not a verified CLI selector. All approval/budget rules remain mandatory.
