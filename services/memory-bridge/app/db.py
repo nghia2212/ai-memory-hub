@@ -22,8 +22,9 @@ from .v3_schema import V3_CONV_SQL, V3_MCP_SQL
 from .v31_schema import BUSINESS_SQL, V31_EXTENSIONS_SQL
 from .v32_skill_schema import V32_SKILL_SQL
 from .v321_schema import V321_BINDINGS_OVERRIDES_SQL, V321_MCP321_SQL
+from .v321_api_agent_schema import V321_API_AGENT_SQL
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 MIGRATIONS: list[tuple[int, str, str]] = [
     (
@@ -537,6 +538,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (9, "centralized_skill_management_v32", V32_SKILL_SQL),
     (10, "mcp_catalog_and_external_plans_v321", V321_MCP321_SQL),
     (11, "mcp321_bindings_overrides_telemetry", V321_BINDINGS_OVERRIDES_SQL),
+    (12, "mcp321_p14_p20_api_agent_and_hybrid", V321_API_AGENT_SQL),
 ]
 
 

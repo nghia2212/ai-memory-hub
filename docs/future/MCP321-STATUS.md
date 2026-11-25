@@ -1,10 +1,10 @@
-# AI Memory Hub V3.2.1 (MCP321) — Trạng thái triển khai (P0–P13 + Business Binding)
+# AI Memory Hub V3.2.1 (MCP321) — Trạng thái triển khai (P0–P20)
 
 Cập nhật: 2026-11-25  
 Nhánh triển khai: `lead/mcp321-integration`  
 Nhánh nền V3.2: `lead/sk32-integration` (`0c25943`)  
-Kế hoạch nguồn: `docs/future/V321-MCP321.md` + `docs/mcp321/P9-P13-TELEMETRY-ADDENDUM.md`  
-Schema SQLite: **v11** (strictly additive `v9 → v10 → v11`, bảo toàn toàn bộ dữ liệu V1–V3.2)
+Kế hoạch nguồn: `docs/future/V321-MCP321.md` + `docs/mcp321/P9-P13-TELEMETRY-ADDENDUM.md` + `docs/mcp321/P14-P20-API-AGENT-ADDENDUM.md`  
+Schema SQLite: **v12** (strictly additive `v9 → v10 → v11 → v12`, bảo toàn toàn bộ dữ liệu V1–V3.2)
 
 | Milestone | Phạm vi | Trạng thái | Bằng chứng & Ghi chú |
 |---|---|---|---|
@@ -17,4 +17,11 @@ Schema SQLite: **v11** (strictly additive `v9 → v10 → v11`, bảo toàn toà
 | **P9** | Client Runtime Adapter Inventory | **DONE** | `GET /v321/runtime-adapters` + Dashboard proxy `/api/v321/runtime-adapters` cho `antigravity`, `claude`, `codex`, `gemini`, `deepseek_api`, `qwen_local` (managed namespace `ai-memory-hub-managed`, rollback, không ghi đè config cá nhân). |
 | **P10** | Skill Execution Telemetry | **DONE** | `GET /v2/traces` đính kèm `skill_runs` theo đúng scope filter (`project_id`/`plan_id`/`task_id`/`session_id`) và hiển thị trong Execution Map. |
 | **P11–P12** | Token / Thinking / Pricing Telemetry & Dashboard | **DONE** | `trace_metrics.py` bổ sung `known_token_subtotal` (không cộng trùng `reasoning_tokens` hay MCP/Skill subset), bảng giá có phiên bản `v321-2026-11` với `estimated_cost_usd` nullable & `cost_kind` (`measured`/`estimated`/`unavailable`), giữ nguyên `null`/`Unknown` (không gán `0` giả). Dashboard Execution Map & Business Detail UI nâng cấp hoàn chỉnh. |
-| **P13** | Acceptance, Live Upgrade, Browser QA & Delivery | **DONE** | `scripts/Test-MCP321.ps1`, full isolated Docker pytest suite, live backup + upgrade Schema v11, Playwright Browser QA 1366×768 & 1920×1080 (0 console/page errors). |
+| **P13** | Acceptance, Live Upgrade, Browser QA & Delivery | **DONE** | `scripts/Test-MCP321.ps1`, full isolated Docker pytest suite, live backup + upgrade Schema v11→v12, Playwright Browser QA 1366×768 & 1920×1080 (0 console/page errors). |
+| **P14** | AI Provider Gateway (DeepSeek, Gemini, Qwen Local, OpenAI, Anthropic + Mock) | **DONE** | `v321_provider_gateway.py`: 5 adapter thật + `MockProviderAdapter` (0 phí), endpoint allowlist chống SSRF, zero network khi startup/search/test, bảo toàn ngữ nghĩa inclusive/exclusive cho `reasoning_tokens`. |
+| **P15** | Quản lý AI Provider, API Key Ref & Project Egress Policy | **DONE** | Migration v12 (`mcp321_provider_profiles`, `mcp321_project_egress_policies`), `v321_provider_service.py`: chỉ lưu tên biến môi trường (chặn raw key `422`), masked UI, fail-closed mặc định cho mọi project (đặc biệt nội bộ/ngân hàng), test cấu hình 0 chi phí. |
+| **P16** | Hub-managed Agent Execution Engine | **DONE** | `v321_agent_engine.py` (`mcp321_agent_runs`, `mcp321_provider_requests`): vòng lặp thực thi bounded (`max_rounds`, `max_calls`, `max_budget_usd`), chế độ mặc định `read_only`, hỗ trợ Cancel, durable state & lưu Handoff thật vào AI Memory Hub. |
+| **P17** | Tích hợp AI Memory, MCP và Skill vào API Agent | **DONE** | `preview_run()` + `_execute_loop()` dùng chung `MemoryBridgeService`, `V32SkillService` và `V31McpGatewayService` (0 LLM cho context resolution); mọi tool call đi qua Gateway default-deny & project overrides, ghi trace đầy đủ vào Execution Map. |
+| **P18** | Token, Thinking & Atomic Budget Controller | **DONE** | `atomic_reserve_request()` + `reconcile_request()`: kiểm tra egress + giá + ngân sách trong SQLite `write_tx`, đặt trước atomic, idempotency chống cộng trùng retry, giữ `uncertain_budget_usd` khi lỗi mạng, không cộng trùng `reasoning_tokens` vào `known_token_subtotal`. |
+| **P19** | Dashboard AI Providers, API Agent & Hybrid Mode | **DONE** | Tab **AI Providers & API Agent** (`v321-api-agent-ui.js`), `mcp321_hybrid_stages` hỗ trợ Hybrid Plan (API Agent + External Antigravity `awaiting_external` trung thực + Local Compute), tích hợp trực tiếp vào Execution Map hiện có. |
+| **P20** | Integration, Security, Playwright QA & Windows Delivery | **DONE (Mock/Isolated) / BLOCKED (Live Paid API)** | `test_v321_p14_p20_api_agent.py` + `Test-MCP321.ps1` + Playwright 1366×768 & 1920×1080 PASS. Live paid API smoke test ghi nhận **BLOCKED** (chưa bật key/phê duyệt chi phí trên live). |

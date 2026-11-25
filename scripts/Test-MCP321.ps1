@@ -62,16 +62,18 @@ try {
         Record-Gate 'Upgrade' 'SKIP' 'Default read-only mode (pass -Upgrade to backup & rebuild)'
     }
 
-    Write-Step '3/9 Checking Health & Schema V11...'
+    Write-Step '3/9 Checking Health & Schema V12...'
     $bh = Wait-Health "$bridge/healthz" $HealthTimeoutSec
     $null = Wait-Health "$codebase/healthz" $HealthTimeoutSec
     $null = Wait-Health "$dash/healthz" $HealthTimeoutSec
-    Record-Gate 'Health & Schema' $(if ([int]$bh.schema_version -ge 11) { 'PASS' } else { 'FAIL' }) "Bridge schema=$($bh.schema_version), Codebase=ready, Dashboard=ready"
+    Record-Gate 'Health & Schema' $(if ([int]$bh.schema_version -ge 12) { 'PASS' } else { 'FAIL' }) "Bridge schema=$($bh.schema_version), Codebase=ready, Dashboard=ready"
 
-    Write-Step '4/9 Checking Dashboard Auth 401 on MCP321 endpoints...'
+    Write-Step '4/9 Checking Dashboard Auth 401 on MCP321 P1-P20 endpoints...'
     foreach ($ep in @(
         '/api/v321/catalog',
         '/api/v321/runtime-adapters',
+        '/api/v321/providers',
+        '/api/v321/agent-runs',
         '/api/v321/external-plans?project_id=20ef268d-5a07-43a7-a66f-8a83e87dd0f7',
         '/api/v321/projects/20ef268d-5a07-43a7-a66f-8a83e87dd0f7/mcp-overrides?business_id=test'
     )) {
@@ -81,7 +83,7 @@ try {
         }
         if ($code -ne 401) { throw "Auth regression on $ep (got $code)" }
     }
-    Record-Gate 'Dashboard Auth (401)' 'PASS' 'All MCP321 catalog, override, adapter & external-plan routes enforce 401'
+    Record-Gate 'Dashboard Auth (401)' 'PASS' 'All MCP321 P1-P20 routes enforce 401'
 
     $readHdr = @{ Authorization = ('Bearer ' + $envMap['BRIDGE_READ_TOKEN']) }
     Write-Step '5/9 Checking Business MCP Bindings & Honest Breakdown live...'
@@ -89,11 +91,13 @@ try {
     $summaryTxt = ($bizs.items | ForEach-Object { "$($_.name): bound=$($_.mcp_bound_total), mcpOnline=$($_.mcp_online_count), packsReady=$($_.local_packs_ready_count), pending=$($_.mcp_pending_approval_count)" }) -join ' | '
     Record-Gate 'Business MCP Breakdown' 'PASS' $summaryTxt
 
-    Write-Step '6/9 Checking P9 Runtime Adapters & Unified P6A External Plans live...'
+    Write-Step '6/9 Checking P9 Runtime Adapters, P14 AI Providers & Unified P6A External Plans live...'
     $ra = Invoke-RestMethod -Uri "$bridge/v321/runtime-adapters" -Headers $readHdr -TimeoutSec 15
+    $provs = Invoke-RestMethod -Uri "$bridge/v321/providers" -Headers $readHdr -TimeoutSec 15
     $opts = Invoke-RestMethod -Uri "$bridge/v2/traces/scope-options?project_id=20ef268d-5a07-43a7-a66f-8a83e87dd0f7&source=all" -Headers $readHdr -TimeoutSec 15
     $extCnt = @($opts.plans | Where-Object { $_.is_monitor_only -eq $true }).Count
-    Record-Gate 'Adapters & External Plans' 'PASS' "Adapters=$(@($ra.adapters).Count), Unified plans=$(@($opts.plans).Count) (external=$extCnt)"
+    Record-Gate 'Adapters, Providers & Plans' 'PASS' "Adapters=$(@($ra.adapters).Count), Providers=$(@($provs.items).Count), Unified plans=$(@($opts.plans).Count) (external=$extCnt)"
+    Record-Gate 'Live Paid API Smoke' 'BLOCKED' 'No explicit paid API spend consent/keys enabled by default (mock/isolated tests cover all flows at $0)'
 
     if ($RunTests) {
         Write-Step '7/9 Running full isolated Docker pytest suite (V1-V3.2.1 / MCP321)...'
@@ -125,7 +129,8 @@ try {
             'tests/v32/test_v32_skills_and_resolution.py',
             'tests/v32/test_v32_p6a_task_centric_execution_map.py',
             'tests/v321/test_v321_mcp_catalog_and_external_plans.py',
-            'tests/v321/test_v321_business_bindings_and_telemetry.py'
+            'tests/v321/test_v321_business_bindings_and_telemetry.py',
+            'tests/v321/test_v321_p14_p20_api_agent.py'
         )
         $suitesStr = $suites -join ' '
         $cmd = "apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null && python -m venv /tmp/mcp321test && /tmp/mcp321test/bin/pip install -q -r /repo/services/memory-bridge/requirements.txt -r /repo/services/dashboard/requirements.txt pytest && cd /repo && PYTHONPATH=/repo /tmp/mcp321test/bin/python -m pytest -p no:cacheprovider -q --maxfail=1 $suitesStr"

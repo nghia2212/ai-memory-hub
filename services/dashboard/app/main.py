@@ -242,6 +242,10 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     def v32_ui_js():
         return Response(Path(__file__).with_name("v32-ui.js").read_bytes(), media_type="application/javascript")
 
+    @app.get("/v321-api-agent-ui.js")
+    def v321_api_agent_ui_js():
+        return Response(Path(__file__).with_name("v321-api-agent-ui.js").read_bytes(), media_type="application/javascript")
+
     @app.get("/api/v2/traces/scope-options")
     async def api_traces_scope_options(request: Request):
         _require_session(request)
@@ -1291,6 +1295,78 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v321_runtime_adapters(request: Request) -> JSONResponse:
         _require_session(request)
         return await _proxy_bridge("GET", "/v321/runtime-adapters")
+
+    # --- V3.2.1 P14-P19 AI Providers, Egress Policy, API Agent Runs & Hybrid Stages ---
+    @app.get("/api/v321/providers")
+    async def api_v321_list_providers(request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", "/v321/providers")
+
+    @app.post("/api/v321/providers")
+    async def api_v321_create_provider(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/providers", use_admin=True, json_body=await request.json())
+
+    @app.put("/api/v321/providers/{profile_id}")
+    async def api_v321_update_provider(profile_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PUT", f"/v321/providers/{profile_id}", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v321/providers/{profile_id}/test")
+    async def api_v321_test_provider(profile_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v321/providers/{profile_id}/test", use_admin=True, json_body=await request.json(), timeout=25.0)
+
+    @app.get("/api/v321/projects/{project_id}/egress-policy")
+    async def api_v321_get_egress(project_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v321/projects/{project_id}/egress-policy")
+
+    @app.put("/api/v321/projects/{project_id}/egress-policy")
+    async def api_v321_set_egress(project_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PUT", f"/v321/projects/{project_id}/egress-policy", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v321/agent-runs/preview")
+    async def api_v321_preview_run(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/agent-runs/preview", planner=True, json_body=await request.json())
+
+    @app.post("/api/v321/agent-runs")
+    async def api_v321_create_run(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/agent-runs", use_admin=True, json_body=await request.json(), timeout=60.0)
+
+    @app.get("/api/v321/agent-runs")
+    async def api_v321_list_runs(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "limit"}
+        return await _proxy_bridge("GET", "/v321/agent-runs", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.get("/api/v321/agent-runs/{run_id}")
+    async def api_v321_get_run(run_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v321/agent-runs/{run_id}")
+
+    @app.post("/api/v321/agent-runs/{run_id}/cancel")
+    async def api_v321_cancel_run(run_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v321/agent-runs/{run_id}/cancel", use_admin=True)
+
+    @app.post("/api/v321/hybrid-plans")
+    async def api_v321_create_hybrid(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/hybrid-plans", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v321/hybrid-plans/{plan_id}")
+    async def api_v321_get_hybrid(plan_id: str, project_id: UUID, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v321/hybrid-plans/{plan_id}", params={"project_id": str(project_id)})
+
+    @app.patch("/api/v321/hybrid-stages/{stage_id}")
+    async def api_v321_patch_hybrid_stage(stage_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PATCH", f"/v321/hybrid-stages/{stage_id}", use_admin=True, json_body=await request.json())
 
     return app
 

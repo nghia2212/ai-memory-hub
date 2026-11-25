@@ -136,6 +136,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script defer src="/v3-ui.js"></script>
   <script defer src="/v31-ui.js"></script>
   <script defer src="/v32-ui.js"></script>
+  <script defer src="/v321-api-agent-ui.js"></script>
 </head>
 <body>
   <header>
@@ -160,6 +161,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button id="sk32-nav" onclick="showTab('skills', this)">Kho Skill &amp; Quy tắc</button>
     <button id="conv-nav" onclick="showTab('conversations', this)">Lịch sử hội thoại AI</button>
     <button id="mcp-nav" onclick="showTab('mcp', this)">Kho MCP &amp; Công cụ</button>
+    <button id="prov-nav" onclick="showTab('providers', this)">AI Providers &amp; API Agent</button>
     <button onclick="showTab('code', this)" >Codebase Explorer</button>
     <button onclick="showTab('projects', this)" >Dự án & Worktree</button>
     <button onclick="showTab('memory', this)" >Bộ nhớ</button>
@@ -776,6 +778,61 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <h3>Skill Telemetry — Lịch sử chọn, cung cấp &amp; nạp Skill (P6)</h3>
         <div id="sk32-runs-list">Chọn dự án ở phần Phân giải Skill để xem Skill Telemetry.</div>
+      </div>
+    </section>
+
+    <!-- P14-P19: AI Providers, Budget Controller, Hub-managed API Agent & Hybrid Mode -->
+    <section id="tab-providers" class="panel">
+      <div class="card" style="margin-bottom:16px">
+        <div class="trace-page-head">
+          <h2>Quản lý AI Provider &amp; Mô hình (P14–P15)</h2>
+          <button id="prov-refresh-btn" type="button" class="secondary">Làm mới</button>
+        </div>
+        <p class="trace-muted">Chỉ lưu tên biến môi trường chứa API Key (không bao giờ lưu plaintext key vào DB, trình duyệt hay Git). Phân biệt rõ API trả phí (<code>metered_api</code>), Local (<code>local_compute</code>) và Mock (<code>0 chi phí</code>).</p>
+        <div id="prov-list">Đăng nhập để tải danh sách AI Provider.</div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Chính sách Egress &amp; Ngân sách theo Dự án (P15 &amp; P18)</h3>
+          <label>Dự án</label><select id="egress-proj-sel"></select>
+          <label><input id="egress-allow-paid" type="checkbox" style="width:auto" /> Cho phép gửi dữ liệu ra AI API trả phí (mặc định TẮT / fail-closed cho dự án nội bộ/ngân hàng)</label>
+          <label>Provider được phép (phân tách dấu phẩy)</label><input id="egress-allowed-keys" value="mock, qwen_local" />
+          <label>Ngân sách tối đa mỗi Task (USD)</label><input id="egress-max-task" type="number" step="0.01" min="0" value="0.00" />
+          <button id="egress-save-btn" type="button" class="primary">Lưu chính sách Egress</button>
+          <div id="egress-status" class="trace-muted" style="margin-top:6px"></div>
+        </div>
+
+        <div class="card">
+          <h3>Khởi chạy Hub-managed API Agent / Hybrid (P16–P19)</h3>
+          <label>Dự án</label><select id="run-proj-sel"></select>
+          <label>Nghiệp vụ</label><select id="run-biz-sel"></select>
+          <label>Chế độ thực thi (Execution Mode)</label>
+          <select id="run-mode-sel">
+            <option value="api_agent">Hub-managed API Agent</option>
+            <option value="hybrid">Hybrid (API + External IDE + Local)</option>
+            <option value="local">Local Compute (Qwen Local)</option>
+            <option value="external">External Agent (Antigravity / CLI)</option>
+          </select>
+          <label>AI Provider</label><select id="run-prov-sel"></select>
+          <div class="row-actions">
+            <label style="flex:1">Thinking Level<select id="run-think-sel"><option value="none">none</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+            <label style="flex:1">Ngân sách tối đa (USD)<input id="run-budget-inp" type="number" step="0.01" min="0" value="0.05" /></label>
+          </div>
+          <label>Mục tiêu nhiệm vụ (chế độ mặc định: read_only)</label>
+          <textarea id="run-obj-inp" rows="3" placeholder="Ví dụ: Tra cứu tài liệu và phân tích kiến trúc module hiện tại"></textarea>
+          <label><input id="run-consent-chk" type="checkbox" style="width:auto" /> Xác nhận đồng ý gửi context (nếu dùng API trả phí)</label>
+          <div class="row-actions">
+            <button id="run-preview-btn" type="button" class="secondary">Xem trước Context / MCP / Skill / Chi phí</button>
+            <button id="run-start-btn" type="button" class="primary">Phê duyệt &amp; Chạy API Agent</button>
+          </div>
+          <pre id="run-preview-out" style="margin-top:8px;max-height:220px">Chưa xem trước.</pre>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3>Lịch sử Hub-managed API Agent Runs &amp; Token / Budget (P16–P19)</h3>
+        <div id="runs-list">Chưa có phiên API Agent nào.</div>
       </div>
     </section>
   </main>
