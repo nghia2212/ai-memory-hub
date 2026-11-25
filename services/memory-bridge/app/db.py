@@ -16,6 +16,7 @@ from typing import Iterator
 from .errors import BridgeError
 
 from .trace_schema import TRACE_SQL
+from .trace_lifecycle import agent_finished
 
 CURRENT_SCHEMA_VERSION = 4
 
@@ -569,6 +570,7 @@ def reconcile_expired_job_leases(conn: sqlite3.Connection, now: str) -> int:
                 "UPDATE v2_plans SET status = 'PAUSED', updated_at = ? WHERE id = ? AND status IN ('APPROVED', 'RUNNING')",
                 (now, plan_id),
             )
+        agent_finished(conn, attempt_id, "unknown", now, "lease_expired", "Outcome unknown; review before retry")
         # Preserve budget reservation: usage/outcome is not known.
     return len(rows)
 
