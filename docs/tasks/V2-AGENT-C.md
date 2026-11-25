@@ -1,0 +1,9 @@
+# Agent C — V2 planner and host execution
+Start after Lead freezes V1 integration SHA and V2 contracts. Branch agent/v2-orchestration; own services/orchestrator/planner/**, services/orchestrator/dispatch/**, integrations/**, scripts/runner/**, tests/orchestrator/runner/**, docs/evidence/v2-agent-c.md. Reuse V1.1 installers/hooks/handoff. Implement bounded plan DAG with rules and optional approved Hermes/DeepSeek, narrow authenticated host runner, verified CLI selectors, fresh task sessions and checkpointing, structured telemetry extraction, quota discovery only supported interfaces, retries/leases/cancel, fallback policy, no execution without approval. Test fake CLIs, no permission bypass, no shell injection, no raw transcript storage, no duplicate sessions, unknown metrics. Real CLI tests only with permission; report unsupported quota fields. Draft PR to lead/v2-orchestrator, evidence and blockers. No merge main.
+
+## Extension: session telemetry and plan forecasts
+Capture authorized CLI session metadata, exact model/effort/auth mode, measured counters and quota snapshots where supported; distinguish delta/cumulative, retries, failures and missing metrics. Integrate forecast into immutable preapproval plan and checkpoints, reconcile actual outcomes and budget reservations. No raw transcript default. See docs/SESSION-ANALYTICS-V2.md.
+
+
+## Adaptive brain extension
+Read docs/ADAPTIVE-BRAIN-V2.md. Implement provider-neutral BrainAdapter with supported host CLI discovery and optional approved API adapters, structured bounded planning, deterministic gate, fallback/escalation caps and telemetry. Verify whether Antigravity menu models have a supported noninteractive interface; if not, report unavailable and propose verified alternatives, no private endpoint or credential extraction. Do not assume Neon integration.

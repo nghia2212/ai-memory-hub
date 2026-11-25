@@ -1,0 +1,146 @@
+name: ai-memory-hub
+services:
+  codebase:
+    build: ./services/codebase
+    mem_limit: 1536m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8081"
+      SERVICE_NAME: codebase
+      CBM_ALLOWED_ROOT: /repos
+      BRIDGE_URL: http://memory-bridge:8082
+      BRIDGE_TOKEN: "${BRIDGE_READ_TOKEN:-}"
+      BRIDGE_TRACE_TOKEN: "${BRIDGE_TRACE_TOKEN:-}"
+      CODEBASE_READ_TOKENS: "${CODEBASE_READ_TOKEN:-${CODEBASE_TOKEN:-}}"
+      CODEBASE_ADMIN_TOKENS: "${CODEBASE_ADMIN_TOKEN:-${CODEBASE_TOKEN:-}}"
+    networks: [core]
+    ports:
+      - "127.0.0.1:${CODEBASE_PORT:-8081}:8081"
+    volumes:
+      - code-index:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  memory-bridge:
+    build:
+      context: .
+      dockerfile: services/memory-bridge/Dockerfile
+    mem_limit: 512m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8082"
+      SERVICE_NAME: memory-bridge
+      CODEBASE_URL: http://codebase:8081
+      CODEBASE_TOKEN: "${CODEBASE_ADMIN_TOKEN:-${CODEBASE_TOKEN:-}}"
+      CODEBASE_READ_TOKEN: "${CODEBASE_READ_TOKEN:-${CODEBASE_TOKEN:-}}"
+      CODEBASE_ADMIN_TOKEN: "${CODEBASE_ADMIN_TOKEN:-${CODEBASE_TOKEN:-}}"
+      BRIDGE_READ_TOKENS: "${BRIDGE_READ_TOKEN:-}"
+      BRIDGE_WRITE_TOKENS: "${BRIDGE_WRITE_TOKEN:-}"
+      BRIDGE_ADMIN_TOKENS: "${BRIDGE_ADMIN_TOKEN:-}"
+      BRIDGE_WORKER_TOKENS: "${BRIDGE_WORKER_TOKEN:-}"
+      BRIDGE_PLANNER_TOKENS: "${BRIDGE_PLANNER_TOKEN:-}"
+      BRIDGE_RUNNER_TOKENS: "${BRIDGE_RUNNER_TOKEN:-}"
+      BRIDGE_RUNNER_TOKEN: "${BRIDGE_RUNNER_TOKEN:-}"
+      HOST_BRAIN_URL: "${HOST_BRAIN_URL:-http://host.docker.internal:8084}"
+      BRIDGE_TRACE_TOKEN: "${BRIDGE_TRACE_TOKEN:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [core]
+    ports:
+      - "127.0.0.1:${BRIDGE_PORT:-8082}:8082"
+    volumes:
+      - memory-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  dashboard:
+    build: ./services/dashboard
+    mem_limit: 256m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8080"
+      SERVICE_NAME: dashboard
+      BRIDGE_URL: http://memory-bridge:8082
+      CODEBASE_READ_TOKEN: "${CODEBASE_READ_TOKEN:-}"
+      BRIDGE_PLANNER_TOKEN: "${BRIDGE_PLANNER_TOKEN:-}"
+      CODEBASE_URL: http://codebase:8081
+      HERMES_URL: http://hermes:8083
+      HERMES_ENABLED: "${HERMES_ENABLED:-false}"
+      HERMES_PROVIDER: "${HERMES_PROVIDER:-deepseek}"
+      DEEPSEEK_API_KEY_SET: "${DEEPSEEK_API_KEY:+true}"
+      HOST_BRAIN_URL: "${HOST_BRAIN_URL:-http://host.docker.internal:8084}"
+      BRIDGE_READ_TOKEN: "${BRIDGE_READ_TOKEN:-}"
+      BRIDGE_ADMIN_TOKEN: "${BRIDGE_ADMIN_TOKEN:-}"
+      BRIDGE_RUNNER_TOKEN: "${BRIDGE_RUNNER_TOKEN:-}"
+      DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD:-}"
+      DASHBOARD_SESSION_SECRET: "${DASHBOARD_SESSION_SECRET:-}"
+      DASHBOARD_ALLOWED_ORIGINS: "${DASHBOARD_ALLOWED_ORIGINS:-http://127.0.0.1:8080,http://localhost:8080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [core]
+    ports:
+      - "127.0.0.1:${HUB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  hermes:
+    build: ./services/hermes
+    mem_limit: 1024m
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8083"
+      SERVICE_NAME: hermes
+      HERMES_ENABLED: "${HERMES_ENABLED:-false}"
+      HERMES_PROVIDER: "${HERMES_PROVIDER:-deepseek}"
+      BRIDGE_URL: http://memory-bridge:8082
+      BRIDGE_WORKER_TOKEN: "${BRIDGE_WORKER_TOKEN:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      DEEPSEEK_BASE_URL: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
+      DEEPSEEK_MODEL: "${DEEPSEEK_MODEL:-deepseek-flash}"
+      HERMES_APPROVED_PROJECTS: "${HERMES_APPROVED_PROJECTS:-}"
+      HERMES_STATE_DIR: /data
+    networks: [core, provider]
+    profiles: [hermes]
+    volumes:
+      - hermes-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8083/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+networks:
+  # Note: Docker Desktop on Windows/WSL2 does not publish host loopback ports
+  # for containers attached exclusively to `internal: true` networks.
+  # Loopback isolation is enforced via explicit `127.0.0.1:<port>:<port>` binds.
+  core: {}
+  provider: {}
+volumes:
+  code-index: {}
+  memory-data: {}
+  hermes-data: {}

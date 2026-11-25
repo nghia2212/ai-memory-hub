@@ -1,0 +1,183 @@
+"""FastMCP server for Memory Bridge V1 custom tools."""
+from __future__ import annotations
+
+from typing import Any
+from uuid import UUID
+
+from fastmcp import FastMCP
+
+from .schemas import (
+    CodeSearchRequest,
+    HandoffCreateRequest,
+    MemoryCreateRequest,
+    MemorySearchRequest,
+)
+from .security import current_mcp_principal, require_scope
+from .service import MemoryBridgeService
+from .v3_service import V3BridgeService
+from .v32_skill_schema import SkillResolveRequest
+from .v32_skill_service import V32SkillService
+
+
+def _require_mcp_scope(scope: str) -> None:
+    principal = current_mcp_principal.get()
+    if principal is None:
+        raise PermissionError(f"Unauthenticated MCP call; scope '{scope}' is required")
+    require_scope(principal, scope)
+
+
+def create_mcp_server(service: MemoryBridgeService) -> FastMCP:
+    mcp = FastMCP("ai-memory-bridge")
+
+    @mcp.tool()
+    def get_project_context(project_id: str, worktree_id: str) -> dict[str, Any]:
+        """Get bounded verified context for a registered project and worktree."""
+        return service.get_project_context(str(UUID(project_id)), str(UUID(worktree_id)))
+
+    @mcp.tool()
+    def search_memory(
+        project_id: str,
+        worktree_id: str,
+        query: str,
+        limit: int = 5,
+        max_chars: int = 4000,
+        include_project_wide: bool = False,
+    ) -> dict[str, Any]:
+        """Search verified memories using Unicode FTS5 within strict project/worktree scope."""
+        req = MemorySearchRequest(
+            project_id=UUID(project_id),
+            worktree_id=UUID(worktree_id),
+            query=query,
+            limit=limit,
+            max_chars=max_chars,
+            include_project_wide=include_project_wide,
+            include_candidates=False,
+        )
+        return service.search_memory(req)
+
+    @mcp.tool()
+    def get_handoff(project_id: str, worktree_id: str, task_id: str) -> dict[str, Any]:
+        """Retrieve task handoffs scoped to project_id and worktree_id."""
+        return service.get_handoff(task_id=task_id, project_id=str(UUID(project_id)), worktree_id=str(UUID(worktree_id)))
+
+    @mcp.tool()
+    def save_task_result(
+        project_id: str,
+        worktree_id: str,
+        task_id: str,
+        summary: str,
+        evidence: dict[str, Any],
+        idempotency_key: str,
+        source_agent: str = "mcp",
+    ) -> dict[str, Any]:
+        """Save a candidate task handoff result with idempotency_key."""
+        _require_mcp_scope("write")
+        req = HandoffCreateRequest(
+            project_id=UUID(project_id),
+            worktree_id=UUID(worktree_id),
+            task_id=task_id,
+            summary=summary,
+            evidence=evidence,
+            source_agent=source_agent,
+            idempotency_key=idempotency_key,
+        )
+        _, result = service.save_handoff(req)
+        return result
+
+    @mcp.tool()
+    def save_decision(
+        project_id: str,
+        worktree_id: str,
+        title: str,
+        summary: str,
+        evidence: str,
+        idempotency_key: str,
+        source_agent: str = "mcp",
+    ) -> dict[str, Any]:
+        """Save a candidate decision memory with idempotency_key."""
+        _require_mcp_scope("write")
+        req = MemoryCreateRequest(
+            project_id=UUID(project_id),
+            worktree_id=UUID(worktree_id),
+            type="decision",
+            title=title,
+            body=summary,
+            evidence_ref=evidence,
+            source_agent=source_agent,
+            idempotency_key=idempotency_key,
+        )
+        _, result = service.create_memory(req)
+        return result
+
+    @mcp.tool()
+    def search_code(
+        project_id: str,
+        worktree_id: str,
+        query: str,
+        limit: int = 5,
+        max_chars: int = 4000,
+    ) -> dict[str, Any]:
+        """Search code symbols via the Codebase Memory adapter."""
+        req = CodeSearchRequest(
+            project_id=UUID(project_id),
+            worktree_id=UUID(worktree_id),
+            query=query,
+            limit=limit,
+            max_chars=max_chars,
+        )
+        return service.search_code(req)
+
+    @mcp.tool()
+    def search_conversations(
+        project_id: str,
+        worktree_id: str,
+        query: str,
+        limit: int = 10,
+        max_chars: int = 4000,
+    ) -> dict[str, Any]:
+        """Search synced AI conversation history via FTS5 within strict project/worktree scope."""
+        v3 = V3BridgeService(service.db)
+        return v3.search_conversations(
+            project_id=str(UUID(project_id)),
+            worktree_id=str(UUID(worktree_id)),
+            query=query,
+            limit=limit,
+            max_chars=max_chars,
+        )
+
+    @mcp.tool()
+    def list_skills(namespace: str | None = None, tag: str | None = None, search: str = "") -> dict[str, Any]:
+        """List active published skills in the centralized SK32 Skill Registry (read-only, 0 LLM)."""
+        svc = V32SkillService(service.db)
+        return svc.list_skills(namespace=namespace, lifecycle="active", tag=tag, search=search)
+
+    @mcp.tool()
+    def resolve_skills(
+        project_id: str,
+        worktree_id: str | None = None,
+        business_id: str | None = None,
+        agent_role: str | None = None,
+        required_capabilities: list[str] | None = None,
+        max_chars: int = 16000,
+    ) -> dict[str, Any]:
+        """Deterministically resolve applicable skills for a project/business/role within budget (read-only, 0 LLM)."""
+        svc = V32SkillService(service.db)
+        req = SkillResolveRequest(
+            project_id=UUID(project_id),
+            worktree_id=UUID(worktree_id) if worktree_id else None,
+            business_id=business_id,
+            agent_role=agent_role,
+            required_capabilities=required_capabilities or [],
+            max_chars=max_chars,
+            adapter="mcp_read",
+            record_run=False,
+        )
+        return svc.resolve_skills(req)
+
+    @mcp.tool()
+    def get_skill_version(skill_id: str, version_id: str | None = None) -> dict[str, Any]:
+        """Retrieve immutable published SKILL.md and manifest for a specific skill version (read-only)."""
+        svc = V32SkillService(service.db)
+        return svc.get_skill_version(skill_id, version_id=version_id)
+
+    return mcp

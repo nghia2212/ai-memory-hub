@@ -3,6 +3,12 @@
 !.env.example
 config/projects.local.yaml
 config/*.local.*
+compose.override.yaml
+compose.override.yml
+docker-compose.override.yml
+docker-compose.override.yaml
+*.local.yml
+*.local.yaml
 data/
 backups/
 logs/

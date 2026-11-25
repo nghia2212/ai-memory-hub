@@ -1,0 +1,33 @@
+# V3 — Dynamic MCP & Conversation History
+Ngày lập kế hoạch: 2026-11-25. Trạng thái: PLANNED, không phải đã triển khai.
+Base: lead/v21-development-workbench, tối thiểu chứa 8009cf62b442733d990db305f09450b86f3ec0c3. Fetch HEAD mới nhất và ghi SHA trước khi tạo feature/v3-dynamic-mcp-history. Draft PR về nhánh base, không merge main.
+V2.2 Bridge đã được người dùng xác nhận ready=True/schema 4 sau hotfix; chưa có bằng chứng nghiệm thu toàn bộ chức năng. Không mặc định V2.2 đã PASS.
+
+## Gate M0 — bắt buộc AI Memory trước khi sửa code
+- Dùng Hub local hiện hữu, không tạo DB thứ hai để thay thế giám sát. Kiểm tra health, project/worktree thực tế, xác định chính xác client đang chạy (Gemini CLI, Antigravity IDE/agy hoặc khác), version, MCP tool list, hook và quyền. Không giả định Gemini CLI và Antigravity dùng chung config. Đọc AGENTS.md, docs/v22/EXECUTION-MAP.md, integrations/common/AGENT-WORKFLOW.md.
+- Kiểm tra worktree mới đã đăng ký và mount đọc đúng; không tự động mount thư mục rộng. Nếu cần người dùng cấp quyền, báo blocker. Lấy V3-DYNAMIC-MCP handoff từ worktree nguồn nếu tồn tại; lưu ID nguồn. Truy vấn get_project_context, search_memory (verified), search_code trước khi đọc rộng. Nếu index stale, báo và refresh đúng scope theo quyền. Không giả mạo MCP call: REST fallback ghi HTTP.
+- Tạo task theo từng milestone qua plan/revision/approval hiện có nếu khả thi; không tự phê duyệt hoặc dispatch trùng chính agent đang thực hiện. Với phiên IDE trực tiếp, đăng ký manual session qua /v2/sessions, ghi /v1/events và /v2/traces theo contract thật, gắn project/worktree/session; plan/task/attempt UUID chỉ dùng khi tồn tại và đúng scope. Dùng task key riêng cho handoff V3-DYNAMIC-MCP, không nhầm với UUID.
+- Tạo root trace đang running, dùng X-Trace-Parent khi client thực sự hỗ trợ, kiểm chứng bằng API đọc và Dashboard. Nếu client không truyền header, ghi nhận độc lập/partial; không suy diễn liên kết. Ghi model thực tế nếu provider báo, còn lại unknown. Không có token thì null.
+- Trước sửa code gửi bằng chứng: project_id/worktree_id/session_id/root_trace_id, kết quả truy vấn memory/code, Dashboard URL, phạm vi chưa hỗ trợ. Không đưa token lên chat/Git. Nếu Hub không ghi/đọc được trace, dừng triển khai và báo blocker, chỉ sửa kết nối an toàn.
+- Mỗi milestone: cập nhật trạng thái running, checkpoint, actual tool calls, tests, blockers, commit SHA và handoff. Ghi lỗi ngay, kết thúc trace/session đúng kết quả. Không dùng fake heartbeat hoặc synthetic evidence trên DB thật. Không gọi model trả phí chỉ để test telemetry.
+- Lưu decision/experience dưới dạng candidate; người dùng review/verify. Không nhập toàn bộ transcript vào memory/events. Nếu Hub gián đoạn, dừng mở rộng feature, lưu checkpoint local đã lọc, báo người dùng; không claim đã đồng bộ. Không tự restart Hub live khi đang giám sát nếu chưa có backup và người dùng đồng ý.
+
+## Milestones
+| ID | Scope | Gate |
+|---|---|---|
+| M0 | Baseline V2.2, connection and observability | Real read/write trace, no synthetic production records; compile all changed Python/JS, targeted regression and health |
+| M1 / V3.0 | Dynamic MCP Registry | Inventory configured servers, discovered tools and capability/permission metadata; versioned registry, health, status, audit, no automatic install/activation |
+| M2 / V3.0 | Scoped dynamic routing | Deterministic capability matching, policy allowlists, approval for new server/side effect, timeout, bounded results, explicit unsupported adapters; preserve V2 MCP interfaces |
+| M3 / V3.1 | Conversation Collector | Local opt-in read-only adapters for Codex, Claude, Gemini, Antigravity; inspect actual documented/observed formats and client versions first; import historical records only from approved project sources; cursor + dedupe + incremental sync; unsupported if no access |
+| M4 / V3.2 | Conversation Storage & Dashboard | Additive migration, Bridge sole writer, scoped sessions/messages, user/assistant visible text only, Vietnamese UI, filters, pagination, safe text rendering, empty/unknown state |
+| M5 / V3.3 | Search & recovery | FTS5 scoped Unicode search, bounded excerpts, view historical conversation and provenance, deletion/retention/export controls; no external model for search |
+| M6 / V3.4 | Chat → Task → Trace → Memory | Explicit identifiers only, show unlinked/partial, navigation both directions; timeline, MCP/LLM/source coverage, no fabricated history |
+| M7 / V3.5 | Selective knowledge reuse | User-approved excerpts or candidate notes with provenance; no auto-inject entire conversation, no external summarization unless opted in; measure actual token effects |
+| M8 | Integration, security, migration, rollback, browser & Windows QA | Test isolated fixture DB and migration copy; existing V2.2 functionality preserved; Docker build/startup smoke, real client checks, report exact failures |
+| M9 | Delivery | Push milestone commits, Draft PR, Test-V3.ps1 with visible progress/timeouts, safe backup/upgrade, no volume deletion, no main merge; report remaining blockers |
+
+## Security / contracts
+Dynamic MCP is not unrestricted command execution: no arbitrary shell/URL from model output; allowlisted server config, explicit approval, no auto-install or external upload; no Docker socket; loopback; credentials referenced via env, redacted logs. Verify actual tool names and upstream versions; unknown means unknown. Conversation capture opt-in per project/client, exclude private reasoning, hidden prompts, credentials, raw tool payloads, unrelated projects; limit size, handle partial/malformed records, quarantine ambiguity. No silent cross-project linking. Store raw visible conversation separately from verified semantic memory. No transcripts or local data in Git. Synthetic fixtures only in tests. New schema migration follows actual latest version; preserve backup/restore and single writer. Use isolated compose project/ports/volumes for destructive tests; live Hub only for genuine work telemetry and approved migration. Dashboard auth, CSRF for writes, bounded reads. No paid provider calls for acceptance by default.
+
+## Acceptance and reporting
+Each milestone report: code SHA, changed files, exact test commands and results, actual trace/session/handoff IDs, Dashboard observed status, known gaps, next task. Update docs/v3/STATUS.md and candidate memory/handoff. Never mark PASS from code existence alone. For unsupported Antigravity/IDE formats document evidence and fallback manual approved import; do not claim historical chat recovered. V3 does not require automatic activation of arbitrary MCP servers. User must approve production upgrade and main merge.
