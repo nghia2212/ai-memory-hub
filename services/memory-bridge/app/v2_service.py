@@ -52,8 +52,45 @@ def _percentile(sorted_vals: list[float], q: float) -> float | None:
     return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (idx - lo)
 
 
-def _default_brain_roles() -> list[dict[str, Any]]:
-    """Verified host CLI defaults per docs/evidence/host-brain-discovery-v2.md."""
+def _default_brain_roles(live_agy_models: set[str] | None = None) -> list[dict[str, Any]]:
+    """Resolve default Adaptive Brain roles against live verified CLI catalog (never assumes quota)."""
+    live = live_agy_models or set()
+
+    def _pick(
+        role_name: str,
+        preferred_label: str,
+        candidates: list[tuple[str, str | None]],
+        fallback_order: list[str],
+    ) -> dict[str, Any]:
+        for model_id, effort in candidates:
+            if model_id in live:
+                return {
+                    "role_name": role_name,
+                    "preferred_label": preferred_label,
+                    "effective_provider": "agy",
+                    "effective_model_id": model_id,
+                    "effective_effort": effort,
+                    "auth_mode": "subscription_cli",
+                    "availability_status": "verified",
+                    "availability_reason": f"Đã xác minh `{model_id}` qua `agy models` (quota chưa xác nhận — kiểm tra quota trước khi chạy).",
+                    "fallback_order": fallback_order,
+                    "max_escalations": 1,
+                    "last_verified_at": None,
+                }
+        return {
+            "role_name": role_name,
+            "preferred_label": preferred_label,
+            "effective_provider": None,
+            "effective_model_id": None,
+            "effective_effort": None,
+            "auth_mode": "subscription_cli",
+            "availability_status": "unavailable",
+            "availability_reason": "Chưa có snapshot catalog CLI khớp với vai trò này; hãy đồng bộ catalog để xác minh.",
+            "fallback_order": fallback_order,
+            "max_escalations": 1,
+            "last_verified_at": None,
+        }
+
     return [
         {
             "role_name": "tier0_rules",
@@ -68,58 +105,49 @@ def _default_brain_roles() -> list[dict[str, Any]]:
             "max_escalations": 0,
             "last_verified_at": None,
         },
-        {
-            "role_name": "tier1_light",
-            "preferred_label": "Gemini 4 Hydrogen (tạm đề xuất: Claude Sonnet 5.5 Low)",
-            "effective_provider": "agy",
-            "effective_model_id": "claude-sonnet-5-5-low",
-            "effective_effort": "low",
-            "auth_mode": "subscription_cli",
-            "availability_status": "verified",
-            "availability_reason": "Gemini 4 Hydrogen chưa có trong agy models v1.1.27; tạm dùng claude-sonnet-5-5-low đã xác minh qua CLI.",
-            "fallback_order": ["claude-sonnet-5-5-low", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
-            "max_escalations": 1,
-            "last_verified_at": None,
-        },
-        {
-            "role_name": "tier2_primary",
-            "preferred_label": "Gemini 4 Neon Medium",
-            "effective_provider": "agy",
-            "effective_model_id": "claude-sonnet-5-5-medium",
-            "effective_effort": "medium",
-            "auth_mode": "subscription_cli",
-            "availability_status": "unavailable",
-            "availability_reason": "Gemini 4 Neon chưa có trong agy models v1.1.27; tạm dùng claude-sonnet-5-5-medium đã xác minh qua CLI.",
-            "fallback_order": ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high", "claude-sonnet-5-5-high"],
-            "max_escalations": 1,
-            "last_verified_at": None,
-        },
-        {
-            "role_name": "tier3_advanced",
-            "preferred_label": "Gemini 4 Carbon / Claude Opus 5.5 Medium",
-            "effective_provider": "agy",
-            "effective_model_id": "claude-opus-5-5-medium",
-            "effective_effort": "medium",
-            "auth_mode": "subscription_cli",
-            "availability_status": "verified",
-            "availability_reason": "Gemini 4 Carbon chưa có trên CLI; claude-opus-5-5-medium đã xác minh qua agy models.",
-            "fallback_order": ["claude-opus-5-5-medium", "claude-opus-5-5-high"],
-            "max_escalations": 1,
-            "last_verified_at": None,
-        },
-        {
-            "role_name": "secondary_fallback",
-            "preferred_label": "Claude Sonnet 5.5 Medium (DeepSeek opt-in)",
-            "effective_provider": "agy",
-            "effective_model_id": "claude-sonnet-5-5-medium",
-            "effective_effort": "medium",
-            "auth_mode": "subscription_cli",
-            "availability_status": "verified",
-            "availability_reason": "Đã xác minh qua agy models; DeepSeek API tắt mặc định",
-            "fallback_order": ["claude-sonnet-5-5-medium"],
-            "max_escalations": 1,
-            "last_verified_at": None,
-        },
+        _pick(
+            "tier1_light",
+            "Gemini 4 Hydrogen",
+            [
+                ("gemini-4-hydrogen-medium", "medium"),
+                ("gemini-4-hydrogen-low", "low"),
+                ("gemini-3.8-flash-medium", "medium"),
+                ("gemini-3.8-flash-low", "low"),
+                ("claude-sonnet-5-5-low", "low"),
+            ],
+            ["gemini-4-hydrogen-medium", "gemini-3.8-flash-medium", "claude-sonnet-5-5-low"],
+        ),
+        _pick(
+            "tier2_primary",
+            "Gemini 4 Neon Medium",
+            [
+                ("gemini-4-neon-medium", "medium"),
+                ("gemini-4-neon-low", "low"),
+                ("gemini-3.8-flash-high", "high"),
+                ("claude-sonnet-5-5-medium", "medium"),
+            ],
+            ["gemini-4-neon-medium", "gemini-4-neon-high", "gemini-3.8-flash-high", "claude-sonnet-5-5-medium"],
+        ),
+        _pick(
+            "tier3_advanced",
+            "Gemini 4 Carbon",
+            [
+                ("gemini-4-carbon-medium", "medium"),
+                ("gemini-4-carbon-high", "high"),
+                ("gemini-4-neon-high", "high"),
+                ("claude-opus-5-5-medium", "medium"),
+            ],
+            ["gemini-4-carbon-medium", "gemini-4-neon-high", "claude-opus-5-5-medium"],
+        ),
+        _pick(
+            "secondary_fallback",
+            "Claude Sonnet 5.5 Medium (DeepSeek API trả phí tắt mặc định)",
+            [
+                ("claude-sonnet-5-5-medium", "medium"),
+                ("gemini-3.8-flash-high", "high"),
+            ],
+            ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high"],
+        ),
     ]
 
 
@@ -684,7 +712,17 @@ class V2BridgeService:
                     for r in rows
                 ]
             else:
-                roles = _default_brain_roles()
+                snap = conn.execute(
+                    "SELECT id FROM v2_catalog_snapshots ORDER BY fetched_at DESC LIMIT 1"
+                ).fetchone()
+                live_agy: set[str] = set()
+                if snap:
+                    mrows = conn.execute(
+                        "SELECT model_id FROM v2_models WHERE snapshot_id = ? AND provider = 'agy' AND status = 'verified' AND auth_mode = 'subscription_cli'",
+                        (snap["id"],),
+                    ).fetchall()
+                    live_agy = {r["model_id"] for r in mrows}
+                roles = _default_brain_roles(live_agy)
 
             return {
                 "available": True,
@@ -1114,6 +1152,22 @@ class V2BridgeService:
 
             if plan["status"] not in ("DRAFT", "REVIEW_REQUIRED"):
                 raise BridgeError(409, "plan_state_conflict", f"Cannot approve plan in state {plan['status']}")
+
+            # Pre-approval quota guard: reject approval if any assigned model is confirmed exhausted.
+            # Never silently swap approved models.
+            quotas = self._latest_quotas(conn)
+            rev_tasks = conn.execute(
+                "SELECT task_key, assigned_provider, assigned_model_id, auth_mode FROM v2_tasks WHERE revision_id = ?",
+                (str(req.revision_id),),
+            ).fetchall()
+            for rt in rev_tasks:
+                q_state = quota_status(quotas, rt["assigned_provider"], rt["assigned_model_id"], rt["auth_mode"])
+                if q_state["state"] == "exhausted":
+                    raise BridgeError(
+                        409,
+                        "quota_exhausted",
+                        f"Cannot approve plan: task '{rt['task_key']}' uses exhausted model {rt['assigned_provider']}/{rt['assigned_model_id']}",
+                    )
 
             conn.execute(
                 """

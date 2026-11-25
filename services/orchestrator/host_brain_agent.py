@@ -110,17 +110,25 @@ def load_env_map(path: Path = ENV_PATH) -> dict[str, str]:
     return out
 
 
-def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25, managed: bool = False) -> tuple[int, str, str]:
+def _run_cmd(
+    args: list[str],
+    *,
+    cwd: str | None = None,
+    timeout: int = 25,
+    managed: bool = False,
+    stdin_text: str | None = None,
+) -> tuple[int, str, str]:
     exe = shutil.which(args[0])
     if not exe:
         return 127, "", f"CLI not found on PATH: {args[0]}"
     cmd = [exe, *args[1:]]
-    if os.name == "nt" and len(subprocess.list2cmdline(cmd).encode("utf-16-le")) // 2 > (7000 if exe.lower().endswith((".cmd", ".bat")) else 30000):
+    if os.name == "nt" and len(subprocess.list2cmdline(cmd).encode("utf-16-le")) // 2 > (7000 if exe.lower().endswith((".cmd", ".bat", ".ps1")) else 30000):
         return 1, "", "Prompt exceeds safe Windows CLI argument size; split the task or use a verified stdin adapter."
     try:
         proc = subprocess.run(
             cmd,
             cwd=cwd,
+            input=stdin_text,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -530,10 +538,10 @@ def execute_approved_plan(
             rc, out, err = 1, "", "Non-subscription dispatch disabled"
         elif provider == "claude":
             invoked = True
-            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
+            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id], cwd=cwd, timeout=90, managed=True, stdin_text=prompt)
         elif provider == "codex":
             invoked = True
-            rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
+            rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, "-"], cwd=cwd, timeout=90, managed=True, stdin_text=prompt)
         elif provider == "agy" and auth_mode == "subscription_cli":
             invoked = True
             rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--output-format", "json", "--print", prompt], cwd=cwd, timeout=90, managed=True)

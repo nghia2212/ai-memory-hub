@@ -206,21 +206,28 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 content={"error": {"code": "bridge_unavailable", "message": "Memory Bridge unavailable"}},
             )
 
+    def _require_session(request: Request) -> str:
+        sid = verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret)
+        if not sid:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": {"code": "unauthorized", "message": "Authentication required"}},
+            )
+        return sid
+
     @app.get("/execution-map.js")
     def execution_map_js():
         return Response(Path(__file__).with_name("execution-map.js").read_bytes(), media_type="application/javascript")
 
     @app.get("/api/v2/traces")
     async def api_traces(request: Request):
-        if not verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret):
-            raise HTTPException(401, "Session required")
+        _require_session(request)
         allowed = {"project_id","worktree_id","plan_id","task_id","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
         return await _proxy_bridge("GET","/v2/traces",params={k:v for k,v in request.query_params.items() if k in allowed})
 
     @app.get("/api/v2/traces/{trace_id}")
     async def api_trace_detail(trace_id: UUID, project_id: UUID, request: Request):
-        if not verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret):
-            raise HTTPException(401, "Session required")
+        _require_session(request)
         return await _proxy_bridge("GET",f"/v2/traces/{trace_id}",params={"project_id":str(project_id)})
 
     @app.get("/workbench.js")
@@ -337,7 +344,8 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         }
 
     @app.get("/api/hermes/config")
-    async def api_hermes_config() -> dict[str, Any]:
+    async def api_hermes_config(request: Request) -> dict[str, Any]:
+        _require_session(request)
         hcfg = await _fetch_hermes_runtime_config()
         status = await _probe_hermes_status()
         return {**hcfg, "deepseek_configured": cfg.deepseek_api_key_set, "runtime": status}
@@ -357,15 +365,18 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         )
 
     @app.get("/api/projects")
-    async def api_projects() -> JSONResponse:
+    async def api_projects(request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v1/projects")
 
     @app.get("/api/projects/{project_id}/worktrees")
-    async def api_worktrees(project_id: str) -> JSONResponse:
+    async def api_worktrees(project_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", f"/v1/projects/{project_id}/worktrees")
 
     @app.get("/api/memories")
-    async def api_memories(project_id: str, state: str = "", worktree_id: str | None = None) -> JSONResponse:
+    async def api_memories(request: Request, project_id: str, state: str = "", worktree_id: str | None = None) -> JSONResponse:
+        _require_session(request)
         params: dict[str, Any] = {"project_id": project_id}
         if state:
             params["state"] = state
@@ -374,38 +385,44 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return await _proxy_bridge("GET", "/v1/memories", params=params)
 
     @app.get("/api/events")
-    async def api_events(project_id: str) -> JSONResponse:
+    async def api_events(request: Request, project_id: str) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v1/events", params={"project_id": project_id})
 
     @app.get("/api/agents/status")
-    async def api_agents_status(project_id: str, worktree_id: str | None = None) -> JSONResponse:
+    async def api_agents_status(request: Request, project_id: str, worktree_id: str | None = None) -> JSONResponse:
+        _require_session(request)
         params: dict[str, Any] = {"project_id": project_id}
         if worktree_id:
             params["worktree_id"] = worktree_id
         return await _proxy_bridge("GET", "/v1/agents/status", params=params)
 
     @app.get("/api/handoffs/{task_id}")
-    async def api_handoffs(task_id: str, project_id: str, worktree_id: str) -> JSONResponse:
+    async def api_handoffs(task_id: str, project_id: str, worktree_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge(
             "GET", f"/v1/handoffs/{task_id}", params={"project_id": project_id, "worktree_id": worktree_id}
         )
 
     @app.get("/api/backups")
-    async def api_backups() -> JSONResponse:
+    async def api_backups(request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v1/backups")
 
     @app.get("/api/metrics")
-    async def api_metrics() -> JSONResponse:
+    async def api_metrics(request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v1/metrics")
 
     @app.post("/api/search/memory")
     async def api_search_memory(request: Request) -> JSONResponse:
-        verify_origin(request, cfg)
+        require_authenticated_csrf(request, cfg)
         body = await request.json()
         return await _proxy_bridge("POST", "/v1/search/memory", json_body=body)
 
     @app.get("/api/explorer/{view}")
     async def explorer(view: str, request: Request):
+        _require_session(request)
         if view not in {"tree", "source", "index", "outline", "graph"}:
             raise HTTPException(404, "Unknown explorer view")
         try:
@@ -418,7 +435,7 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
 
     @app.post("/api/search/code")
     async def api_search_code(request: Request) -> JSONResponse:
-        verify_origin(request, cfg)
+        require_authenticated_csrf(request, cfg)
         body = await request.json()
         return await _proxy_bridge("POST", "/v1/search/code", json_body=body)
 
@@ -459,7 +476,8 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
 
     # --- V2 Adaptive Brain & Planner Token Accounting Proxy Routes ---
     @app.get("/api/v2/brain/config")
-    async def api_v2_brain_config(project_id: str) -> JSONResponse:
+    async def api_v2_brain_config(request: Request, project_id: str) -> JSONResponse:
+        _require_session(request)
         resp = await _proxy_bridge("GET", "/v2/brain/config", params={"project_id": project_id})
         if resp.status_code == 404:
             return JSONResponse(
@@ -488,8 +506,8 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                             "effective_model_id": None,
                             "auth_mode": "subscription_cli",
                             "availability_status": "unavailable",
-                            "availability_reason": "Chưa xuất hiện trong agy models v1.1.27; gợi ý xác minh: gemini-3.8-flash-medium",
-                            "fallback_order": ["gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
+                            "availability_reason": "Chưa quét danh mục CLI; chạy đồng bộ catalog để kiểm tra khả dụng thực tế.",
+                            "fallback_order": ["gemini-4-hydrogen-medium", "gemini-3.8-flash-medium"],
                         },
                         {
                             "role_name": "tier2_primary",
@@ -498,27 +516,27 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                             "effective_model_id": None,
                             "auth_mode": "subscription_cli",
                             "availability_status": "unavailable",
-                            "availability_reason": "Chưa xuất hiện trong agy models v1.1.27; cần xác minh hoặc duyệt thay thế: claude-sonnet-5-5-medium",
-                            "fallback_order": ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high"],
+                            "availability_reason": "Chưa quét danh mục CLI; chạy đồng bộ catalog để kiểm tra khả dụng thực tế.",
+                            "fallback_order": ["gemini-4-neon-medium", "gemini-3.8-flash-high", "claude-sonnet-5-5-medium"],
                         },
                         {
                             "role_name": "tier3_advanced",
-                            "preferred_label": "Gemini 4 Carbon / Claude Opus 5.5",
-                            "effective_provider": "agy",
-                            "effective_model_id": "claude-opus-5-5-medium",
+                            "preferred_label": "Gemini 4 Carbon",
+                            "effective_provider": None,
+                            "effective_model_id": None,
                             "auth_mode": "subscription_cli",
-                            "availability_status": "verified",
-                            "availability_reason": "Carbon chưa có trên CLI; claude-opus-5-5-medium đã xác minh qua agy models",
-                            "fallback_order": ["claude-opus-5-5-medium", "claude-opus-5-5-high"],
+                            "availability_status": "unavailable",
+                            "availability_reason": "Chưa quét danh mục CLI; chạy đồng bộ catalog để kiểm tra khả dụng thực tế.",
+                            "fallback_order": ["gemini-4-carbon-medium", "claude-opus-5-5-medium"],
                         },
                         {
                             "role_name": "secondary_fallback",
-                            "preferred_label": "Claude Sonnet 5.5 Medium (DeepSeek opt-in)",
-                            "effective_provider": "agy",
-                            "effective_model_id": "claude-sonnet-5-5-medium",
+                            "preferred_label": "Claude Sonnet 5.5 Medium (DeepSeek opt-in tắt mặc định)",
+                            "effective_provider": None,
+                            "effective_model_id": None,
                             "auth_mode": "subscription_cli",
-                            "availability_status": "verified",
-                            "availability_reason": "Đã xác minh qua agy models; DeepSeek API tắt mặc định",
+                            "availability_status": "unavailable",
+                            "availability_reason": "Chưa quét danh mục CLI; DeepSeek API trả phí luôn tắt mặc định.",
                             "fallback_order": ["claude-sonnet-5-5-medium"],
                         },
                     ],
@@ -532,7 +550,8 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return await _proxy_bridge("PUT", "/v2/brain/config", use_admin=True, json_body=await request.json())
 
     @app.get("/api/v2/usage")
-    async def api_v2_usage(project_id: str) -> JSONResponse:
+    async def api_v2_usage(request: Request, project_id: str) -> JSONResponse:
+        _require_session(request)
         resp = await _proxy_bridge("GET", "/v2/usage", params={"project_id": project_id})
         if resp.status_code == 404:
             return JSONResponse(
@@ -560,7 +579,8 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return resp
 
     @app.get("/api/v2/catalog")
-    async def api_v2_catalog() -> JSONResponse:
+    async def api_v2_catalog(request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v2/catalog")
 
     @app.post("/api/v2/catalog/sync")
@@ -711,12 +731,14 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         )
 
     @app.get("/api/v2/evaluations")
-    async def api_v2_evaluations(project_id: str | None = None) -> JSONResponse:
+    async def api_v2_evaluations(request: Request, project_id: str | None = None) -> JSONResponse:
+        _require_session(request)
         params = {"project_id": project_id} if project_id else None
         return await _proxy_bridge("GET", "/v2/evaluations", params=params)
 
     @app.get("/api/v2/policies")
-    async def api_v2_policies(project_id: str) -> JSONResponse:
+    async def api_v2_policies(request: Request, project_id: str) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v2/policies", params={"project_id": project_id})
 
     @app.put("/api/v2/policies")
@@ -725,11 +747,13 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return await _proxy_bridge("PUT", "/v2/policies", use_admin=True, json_body=await request.json())
 
     @app.get("/api/v2/plans")
-    async def api_v2_plans(project_id: str) -> JSONResponse:
+    async def api_v2_plans(request: Request, project_id: str) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v2/plans", params={"project_id": project_id})
 
     @app.get("/api/v2/plans/{plan_id}")
-    async def api_v2_plan_detail(plan_id: str, project_id: str) -> JSONResponse:
+    async def api_v2_plan_detail(plan_id: str, project_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", f"/v2/plans/{plan_id}", params={"project_id": project_id})
 
     @app.put("/api/v2/plans/{plan_id}/revisions")
@@ -775,11 +799,13 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         )
 
     @app.get("/api/v2/session-detail")
-    async def api_v21_session_detail(session_id: UUID, project_id: UUID) -> JSONResponse:
+    async def api_v21_session_detail(session_id: UUID, project_id: UUID, request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", f"/v2/sessions/{session_id}", params={"project_id": str(project_id)})
 
     @app.get("/api/v2/sessions")
-    async def api_v2_sessions(project_id: str, complexity: str = "", outcome: str = "") -> JSONResponse:
+    async def api_v2_sessions(request: Request, project_id: str, complexity: str = "", outcome: str = "") -> JSONResponse:
+        _require_session(request)
         params: dict[str, Any] = {"project_id": project_id}
         if complexity:
             params["complexity"] = complexity
@@ -798,11 +824,13 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         )
 
     @app.get("/api/v2/analytics/cohorts")
-    async def api_v2_cohorts(project_id: str) -> JSONResponse:
+    async def api_v2_cohorts(request: Request, project_id: str) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v2/analytics/cohorts", params={"project_id": project_id})
 
     @app.get("/api/v2/analytics/calibration")
-    async def api_v2_calibration(project_id: str) -> JSONResponse:
+    async def api_v2_calibration(request: Request, project_id: str) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v2/analytics/calibration", params={"project_id": project_id})
 
     @app.post("/api/v2/quotas")
@@ -811,7 +839,8 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return await _proxy_bridge("POST", "/v2/quotas", use_admin=True, json_body=await request.json())
 
     @app.get("/api/v2/quotas")
-    async def api_v2_quotas() -> JSONResponse:
+    async def api_v2_quotas(request: Request) -> JSONResponse:
+        _require_session(request)
         return await _proxy_bridge("GET", "/v2/quotas")
 
     return app

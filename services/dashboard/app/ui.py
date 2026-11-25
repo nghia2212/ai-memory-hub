@@ -536,7 +536,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         btnIn.style.display = "none";
         btnOut.style.display = "inline-block";
       } else {
-        badge.textContent = "Chưa đăng nhập (Chỉ đọc)";
+        badge.textContent = "Chưa đăng nhập (Cần đăng nhập)";
         badge.className = "badge warn";
         pw.style.display = "inline-block";
         btnIn.style.display = "inline-block";
@@ -548,8 +548,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const data = await apiFetch("/api/auth/session");
         updateAuthUI(data.authenticated, data.csrf_token);
+        return Boolean(data.authenticated);
       } catch {
         updateAuthUI(false, null);
+        return false;
       }
     }
 
@@ -560,6 +562,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById("login-password").value = "";
         updateAuthUI(true, data.csrf_token);
         toast("Đăng nhập thành công");
+        await Promise.all([loadOverview(), loadHermesPanel(), loadProjects()]);
+        window.dispatchEvent(new Event("hub-ready"));
       } catch (e) {
         toast("Đăng nhập thất bại: " + e.message);
       }
@@ -569,6 +573,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         await apiFetch("/api/auth/logout", { method: "POST" });
         updateAuthUI(false, null);
+        projectsCache = [];
+        worktreesByProject = {};
+        document.getElementById("projects-list").innerHTML = `<p class="badge warn">Vui lòng đăng nhập để xem dữ liệu dự án.</p>`;
         toast("Đã đăng xuất");
       } catch (e) {
         toast(e.message);
@@ -1190,11 +1197,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     window.addEventListener("DOMContentLoaded", async () => {
-      await checkSession();
+      const authed = await checkSession();
       await loadOverview();
-      await loadHermesPanel();
-      await loadProjects();
-      window.dispatchEvent(new Event("hub-ready"));
+      if (authed) {
+        await loadHermesPanel();
+        await loadProjects();
+        window.dispatchEvent(new Event("hub-ready"));
+      } else {
+        document.getElementById("projects-list").innerHTML = `<p class="badge warn">Vui lòng đăng nhập để xem và quản trị dữ liệu dự án.</p>`;
+      }
     });
   </script>
 </body>

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from .trace_execution import build_execution_trace
-from .cli_runner import UnsafeCLIRequestError, build_cli_command, parse_cli_telemetry
+from .cli_runner import UnsafeCLIRequestError, build_cli_invocation, parse_cli_telemetry
 
 
 class RunnerBridgeProtocol(Protocol):
@@ -136,10 +136,11 @@ class HostRunner:
         self._run_proc = subprocess_runner or self._default_run_proc
 
     @staticmethod
-    def _default_run_proc(cmd: list[str], cwd: str, timeout: float) -> tuple[int, str, str]:
+    def _default_run_proc(cmd: list[str], cwd: str, timeout: float, stdin_text: str | None = None) -> tuple[int, str, str]:
         proc = subprocess.run(
             cmd,
             cwd=cwd,
+            input=stdin_text,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -205,7 +206,7 @@ class HostRunner:
         )
 
         try:
-            cmd, cwd = build_cli_command(
+            cmd, cwd, stdin_text = build_cli_invocation(
                 cli_family=cli_family,
                 model_id=model_id,
                 worktree_path=worktree_path,
@@ -254,7 +255,10 @@ class HostRunner:
             except Exception:
                 pass
         try:
-            rc, stdout, _stderr = self._run_proc(cmd, cwd, timeout_s)
+            if stdin_text is not None:
+                rc, stdout, _stderr = self._run_proc(cmd, cwd, timeout_s, stdin_text)
+            else:
+                rc, stdout, _stderr = self._run_proc(cmd, cwd, timeout_s)
         except subprocess.TimeoutExpired:
             report_trace("unknown", "timeout")
             self.bridge.checkpoint(

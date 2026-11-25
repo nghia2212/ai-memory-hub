@@ -48,7 +48,22 @@ def validate_worktree_path(worktree_path: str) -> str:
     return str(resolved)
 
 
-def build_cli_command(
+STDIN_VERIFIED_CLI_FAMILIES = frozenset({"codex", "claude"})
+
+
+def _is_windows() -> bool:
+    import os
+
+    return os.name == "nt"
+
+
+def _win_argv_utf16_len(args: list[str]) -> int:
+    import subprocess
+
+    return len(subprocess.list2cmdline(args).encode("utf-16-le")) // 2
+
+
+def build_cli_invocation(
     *,
     cli_family: str,
     model_id: str,
@@ -57,8 +72,9 @@ def build_cli_command(
     effort: str | None = None,
     executable: str | None = None,
     max_budget_usd: float | None = None,
-) -> tuple[list[str], str]:
-    """Build structured argument vector (no shell=True, no permission bypass flags)."""
+    prefer_stdin: bool = False,
+) -> tuple[list[str], str, str | None]:
+    """Build structured argument vector and optional stdin payload (no shell=True, no silent truncation)."""
     if cli_family not in ALLOWED_CLI_FAMILIES:
         raise UnsafeCLIRequestError(f"Unsupported CLI family: {cli_family}")
     if not _SAFE_SELECTOR_RE.match(model_id):
@@ -74,20 +90,24 @@ def build_cli_command(
     bounded_prompt = prompt.strip()
     if len(bounded_prompt) > 32000:
         raise UnsafeCLIRequestError("Prompt exceeds 32000 characters; split the task.")
-    # Windows launch limits apply to quoted UTF-16 command lines, especially .cmd wrappers.
-    import os
-    import subprocess
-    if os.name == "nt" and len(subprocess.list2cmdline([exe, model_id, bounded_prompt]).encode("utf-16-le")) // 2 > (7000 if exe.lower().endswith((".cmd", ".bat")) else 30000):
-        raise UnsafeCLIRequestError("Prompt exceeds safe Windows CLI argument size; split the task or use a verified stdin adapter.")
     if not bounded_prompt:
         raise UnsafeCLIRequestError("Prompt must be non-empty.")
+
+    win_limit = 7000 if exe.lower().endswith((".cmd", ".bat", ".ps1")) else 30000
+    exceeds_win_argv = _is_windows() and _win_argv_utf16_len([exe, model_id, bounded_prompt]) > win_limit
+    use_stdin = (prefer_stdin or exceeds_win_argv) and cli_family in STDIN_VERIFIED_CLI_FAMILIES
+
+    if exceeds_win_argv and not use_stdin:
+        raise UnsafeCLIRequestError(
+            "Prompt exceeds safe Windows CLI argument size and this CLI adapter does not have a verified stdin transport; split the task."
+        )
 
     if cli_family == "agy":
         cmd = [exe, "--print", "--output-format", "json", "--model", model_id]
         if effort:
             cmd.extend(["--effort", effort])
         cmd.append(bounded_prompt)
-        return cmd, cwd
+        return cmd, cwd, None
 
     if cli_family == "claude":
         cmd = [exe, "-p", "--output-format", "json", "--model", model_id, "--permission-mode", "acceptEdits"]
@@ -95,14 +115,48 @@ def build_cli_command(
             cmd.extend(["--effort", effort])
         if max_budget_usd is not None:
             cmd.extend(["--max-budget-usd", f"{max_budget_usd:.4f}"])
+        if use_stdin:
+            return cmd, cwd, bounded_prompt
         cmd.append(bounded_prompt)
-        return cmd, cwd
+        return cmd, cwd, None
 
     if cli_family == "codex":
-        cmd = [exe, "exec", "--json", "-m", model_id, "-s", "workspace-write", "-C", cwd, bounded_prompt]
-        return cmd, cwd
+        cmd = [exe, "exec", "--json", "-m", model_id, "-s", "workspace-write", "-C", cwd]
+        if use_stdin:
+            cmd.append("-")
+            return cmd, cwd, bounded_prompt
+        cmd.append(bounded_prompt)
+        return cmd, cwd, None
 
     cmd = [exe, "-p", bounded_prompt, "--output-format", "json", "-m", model_id]
+    return cmd, cwd, None
+
+
+def build_cli_command(
+    *,
+    cli_family: str,
+    model_id: str,
+    worktree_path: str,
+    prompt: str,
+    effort: str | None = None,
+    executable: str | None = None,
+    max_budget_usd: float | None = None,
+) -> tuple[list[str], str]:
+    """Backwards-compatible wrapper returning (cmd, cwd) when prompt fits CLI argv."""
+    cmd, cwd, stdin_text = build_cli_invocation(
+        cli_family=cli_family,
+        model_id=model_id,
+        worktree_path=worktree_path,
+        prompt=prompt,
+        effort=effort,
+        executable=executable,
+        max_budget_usd=max_budget_usd,
+        prefer_stdin=False,
+    )
+    if stdin_text is not None:
+        raise UnsafeCLIRequestError(
+            "Prompt requires stdin transport on Windows; call build_cli_invocation() to pass stdin safely."
+        )
     return cmd, cwd
 
 
