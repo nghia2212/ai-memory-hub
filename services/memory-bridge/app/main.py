@@ -35,6 +35,7 @@ from .security import AuthPrincipal, authenticate_token, current_mcp_principal, 
 from .service import MemoryBridgeService
 from .v2_routes import create_v2_router
 from .trace_routes import create_trace_router
+from .trace_operations import trace_parent, trace_transport
 from .v2_service import V2BridgeService
 
 
@@ -76,6 +77,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_exception_handler(BridgeError, bridge_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+
+    @app.middleware("http")
+    async def trace_context_middleware(request: Request, call_next):
+        # Explicit caller correlation only; no guessing from active sessions.
+        token = trace_parent.set(request.headers.get("X-Trace-Parent"))
+        transport = trace_transport.set("mcp" if request.url.path == "/mcp" or request.url.path.startswith("/mcp/") else "http")
+        try:
+            return await call_next(request)
+        finally:
+            trace_transport.reset(transport)
+            trace_parent.reset(token)
 
     @app.middleware("http")
     async def mcp_auth_middleware(request: Request, call_next):
