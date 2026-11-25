@@ -466,13 +466,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <label>Trạng thái<select id="trace-status"><option value="">Tất cả</option><option>running</option><option>succeeded</option><option>failed</option><option>blocked</option><option>cancelled</option><option>unknown</option><option>unsupported</option></select></label>
           <label>Từ giờ VN<input type="datetime-local" id="trace-from"></label>
           <label>Đến giờ VN<input type="datetime-local" id="trace-to"></label>
-          <label>Chế độ<select id="trace-mode"><option value="graph">Graph View</option><option value="swim">Swimlane View</option></select></label>
+          <label>Tìm step / tool / model<input id="trace-search" maxlength="200"></label>
+          <label>Sắp xếp<select id="trace-sort"><option value="time_asc">Thời gian tăng</option><option value="time_desc">Mới nhất</option><option value="duration_desc">Lâu nhất</option><option value="status">Trạng thái</option></select></label>
+          <label>Chế độ<select id="trace-mode"><option value="graph">Graph View</option><option value="swim">Swimlane View</option><option value="timeline">Timeline View</option><option value="table">Table View</option></select></label>
         </div>
         <button id="trace-refresh" type="button">Tải trace</button>
         <p id="trace-count" aria-live="polite"></p>
         <button id="trace-prev" type="button" class="secondary">Trang trước</button>
         <button id="trace-next" type="button" class="secondary">Trang sau</button>
       </div>
+      <div id="trace-metrics" class="trace-metrics" aria-live="polite"></div>
       <div class="trace-layout">
         <div class="card trace-canvas" id="trace-view"></div>
         <aside class="card" id="trace-detail">Chọn step để xem bằng chứng.</aside>
