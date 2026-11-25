@@ -6,6 +6,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, Request
 from .trace_schema import TraceEvent
+from .trace_metrics import summarize
 from .security import authenticate_token, extract_bearer_token, require_any_scope, require_scope, redact_payload, compute_payload_hash
 from .errors import BridgeError
 
@@ -115,7 +116,45 @@ def create_trace_router(db, cfg):
             return decode(conn.execute("SELECT * FROM v22_execution_traces WHERE trace_id=?", (data["trace_id"],)).fetchone())
 
     @router.get("")
-    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, task_id: UUID | None=None, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), p=Depends(reader)):
+    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, task_id: UUID | None=None, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), search: str | None=Query(None,max_length=200), sort: str=Query('time_asc',pattern='^(time_asc|time_desc|duration_desc|status)):
+        project = str(project_id)
+        filters = {"project_id":project,"worktree_id":worktree_id,"session_id":session_id,"plan_id":plan_id,"task_id":task_id,"root_trace_id":root_trace_id,"actor_id":actor_id,"model_id":model_id,"status":status}
+        clauses, args = [], []
+        for k,v in filters.items():
+            if v is not None:
+                clauses.append(k+"=?")
+                args.append(str(v))
+        for value, operator in ((from_time,">="),(to_time,"<=")):
+            if value is not None:
+                if value.utcoffset() is None:
+                    raise BridgeError(422,"trace_time","Timezone required")
+                clauses.append("started_at"+operator+"?")
+                args.append(value.astimezone(timezone.utc).isoformat(timespec="microseconds"))
+        if search:
+            clauses.append("(instr(lower(step_name),lower(?))>0 OR instr(lower(coalesce(actor_id,'')),lower(?))>0 OR instr(lower(coalesce(tool_name,'')),lower(?))>0 OR instr(lower(step_type),lower(?))>0 OR instr(lower(coalesce(model_id,'')),lower(?))>0)")
+            args.extend([search]*5)
+        order = {"time_asc":"started_at,trace_id","time_desc":"started_at DESC,trace_id","duration_desc":"duration_ms IS NULL,duration_ms DESC,trace_id","status":"status,started_at,trace_id"}[sort]
+        where = " AND ".join(clauses)
+        with db.read_conn() as conn:
+            check_scope(conn,project,str(worktree_id) if worktree_id else None)
+            total = conn.execute("SELECT COUNT(*) FROM v22_execution_traces WHERE "+where,args).fetchone()[0]
+            rows = conn.execute("SELECT * FROM v22_execution_traces WHERE "+where+" ORDER BY "+order+" LIMIT ? OFFSET ?",args+[limit,offset]).fetchall()
+            items = [decode(r) for r in rows]
+            # Bound aggregate scans; label partial results explicitly.
+            sample = conn.execute("SELECT * FROM v22_execution_traces WHERE "+where+" ORDER BY started_at,trace_id LIMIT 5000",args).fetchall()
+            metrics = summarize(decode(r) for r in sample)
+            metrics["partial"] = total > len(sample)
+            return {"items":items,"total":total,"next_offset":offset+limit if offset+limit<total else None,"metrics":metrics}
+
+    @router.get("/{trace_id}")
+    def detail(trace_id: UUID, project_id: UUID, p=Depends(reader)):
+        with db.read_conn() as conn:
+            row = conn.execute("SELECT * FROM v22_execution_traces WHERE trace_id=? AND project_id=?", (str(trace_id),str(project_id))).fetchone()
+            if not row:
+                raise BridgeError(404,"trace_not_found","Trace not found")
+            return decode(row)
+    return router
+), p=Depends(reader)):
         project = str(project_id)
         filters = {"project_id":project,"worktree_id":worktree_id,"session_id":session_id,"plan_id":plan_id,"task_id":task_id,"root_trace_id":root_trace_id,"actor_id":actor_id,"model_id":model_id,"status":status}
         clauses, args = [], []
