@@ -30,3 +30,31 @@ def test_trace_lifecycle(client):
     assert client.get(url+"/"+tid,params={"project_id":other},headers=h("tok-read")).status_code==404
     assert client.post(url,json=dict(child,trace_id=str(uuid4()),project_id=other,worktree_id=other_wt),headers=h("tok-write")).status_code==422
     assert client.post(url,json=dict(event,input_tokens=-1),headers=h("tok-write")).status_code==422
+
+
+def test_memory_operation_evidence(client, monkeypatch):
+    pid, wid = _setup_project(client)
+    scope = {"project_id":pid,"worktree_id":wid}
+    parent = str(uuid4())
+    event = dict(trace_id=parent,root_trace_id=parent,**scope,step_type="agent_step",
+                 step_name="fixture",actor_type="agent",status="running",
+                 started_at="2026-01-01T00:00:00Z",metadata_json={"source":"fixture"})
+    assert client.post("/v2/traces",json=event,headers=h("tok-runner")).status_code==201
+    headers = {**h("tok-read"),"X-Trace-Parent":parent}
+    assert client.get("/v1/context",params=scope,headers=headers).status_code==200
+    assert client.post("/v1/search/memory",json={**scope,"query":"private fixture"},headers=headers).status_code==200
+    rows = client.get("/v2/traces",params={"project_id":pid},headers=h("tok-read")).json()["items"]
+    for name in ("get_project_context","search_memory"):
+        step = next(t for t in rows if t["step_name"]==name)
+        assert step["parent_trace_id"]==parent
+        assert step["used_memory"] is True and step["used_mcp"] is False
+        assert step["used_llm"] is False
+        assert "private fixture" not in str(step)
+    monkeypatch.setenv("BRIDGE_TRACE_TOKEN","fixture-trace-only")
+    adapter = dict(event,trace_id=str(uuid4()),step_type="mcp_tool_call",actor_type="mcp",actor_id="codebase-adapter",step_name="trace_path",used_mcp=True)
+    adapter["root_trace_id"]=adapter["trace_id"]
+    response = client.post("/v2/traces",json=adapter,headers={**h("fixture-trace-only"),"X-Trace-Parent":parent})
+    assert response.status_code==201, response.text
+    assert response.json()["parent_trace_id"]==parent
+    assert client.get("/v2/traces",params={"project_id":pid},headers=h("fixture-trace-only")).status_code==401
+    assert client.post("/v2/traces",json=dict(adapter,input_tokens=100),headers=h("fixture-trace-only")).status_code==403
