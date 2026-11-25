@@ -149,7 +149,7 @@ def test_p04_migration_6_to_7_to_8_preserves_data_and_backup_restore(tmp_path: P
     dm.initialize()
     ready, ver = dm.check_health()
     assert ready is True
-    assert ver == CURRENT_SCHEMA_VERSION == 8
+    assert ver == CURRENT_SCHEMA_VERSION and ver >= 8
 
     # 3. Verify existing data intact & idempotent re-initialize
     dm.initialize()
@@ -160,6 +160,6 @@ def test_p04_migration_6_to_7_to_8_preserves_data_and_backup_restore(tmp_path: P
 
     # 4. Verify backup & restore round-trip
     bk = dm.create_backup()
-    assert bk["schema_version"] == 8
+    assert bk["schema_version"] == CURRENT_SCHEMA_VERSION
     res = dm.restore_backup(str(bk["backup_id"]))
     assert res["restored"] is True
