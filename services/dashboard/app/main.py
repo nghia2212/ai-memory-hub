@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import re
 from pathlib import Path
@@ -377,23 +378,38 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             )
 
     async def _probe_host_brain_status() -> dict[str, Any]:
+        checked_at = datetime.now(timezone.utc).isoformat()
+        start_all_cmd = r"powershell -ExecutionPolicy Bypass -File scripts\Start-AIMemoryHub.ps1"
+        start_host_cmd = r"powershell -ExecutionPolicy Bypass -File scripts\start-host-brain-agent.ps1"
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 r = await client.get(f"{cfg.host_brain_url.rstrip('/')}/healthz")
                 if r.status_code == 200:
-                    return {
-                        "ready": True,
-                        "state": "active",
-                        "label": "Đang hoạt động",
-                        "detail": "Host Brain Agent (agy/claude/codex CLI) đang kết nối.",
-                    }
-        except Exception:
-            pass
+                    payload = r.json() if r.content else {}
+                    if payload.get("ready") is True:
+                        return {
+                            "ready": True,
+                            "state": "active",
+                            "label": "Đang hoạt động",
+                            "detail": "Host Brain Agent (agy/claude/codex CLI) đã kết nối thực tế từ Hub container.",
+                            "checked_at": checked_at,
+                            "remote_host_control_supported": False,
+                            "recommended_command": start_all_cmd,
+                            "fallback_command": start_host_cmd,
+                        }
+        except Exception as exc:
+            err_msg = str(exc)[:180]
+        else:
+            err_msg = "Health endpoint trả về ready=false."
         return {
             "ready": False,
             "state": "disabled",
-            "label": "Đã tắt",
-            "detail": "Host Brain Agent chạy theo yêu cầu trên host (chạy scripts/start-host-brain-agent.ps1 để bật).",
+            "label": "Chưa kết nối",
+            "detail": f"Host Brain Agent chưa chạy trên Windows host hoặc không kết nối được ({err_msg}). Chạy: {start_all_cmd}",
+            "checked_at": checked_at,
+            "remote_host_control_supported": False,
+            "recommended_command": start_all_cmd,
+            "fallback_command": start_host_cmd,
         }
 
     # --- Read-only Proxy Routes ---

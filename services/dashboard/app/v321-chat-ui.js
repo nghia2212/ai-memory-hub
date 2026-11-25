@@ -577,7 +577,51 @@
     tblBox.append(tbl);
   }
 
+  async function loadHostHealthCard() {
+    const body = $("agent-host-health-body");
+    if (!body) return;
+    try {
+      const st = await apiFetch("/api/status");
+      body.replaceChildren();
+      const row = el("div", null, "row-actions");
+      row.style.flexWrap = "wrap";
+      row.style.gap = "8px";
+      const brOk = Boolean(st.bridge?.ready);
+      const cbOk = Boolean(st.codebase?.ready);
+      const hbOk = Boolean(st.host_brain?.ready);
+      row.append(
+        el("span", `Memory Bridge: ${brOk ? "Sẵn sàng (v" + (st.bridge?.schema_version || "?") + ")" : "Chưa sẵn sàng"}`, `badge ${brOk ? "ok" : "err"}`),
+        el("span", `Codebase: ${cbOk ? "Sẵn sàng" : "Chưa sẵn sàng"}`, `badge ${cbOk ? "ok" : "err"}`),
+        el("span", `Host Brain Agent: ${st.host_brain?.label || (hbOk ? "Đang hoạt động" : "Chưa kết nối")}`, `badge ${hbOk ? "ok" : "err"}`)
+      );
+      if (st.host_brain?.checked_at) {
+        row.append(el("small", `Kiểm tra lúc: ${vnTime(st.host_brain.checked_at)}`, "trace-muted"));
+      }
+      body.append(row);
+      body.append(el("p", st.host_brain?.detail || "", "trace-muted"));
+
+      const actions = el("div", null, "row-actions");
+      actions.style.flexWrap = "wrap";
+      const cmdAll = st.host_brain?.recommended_command || "powershell -ExecutionPolicy Bypass -File scripts\\Start-AIMemoryHub.ps1";
+      const cmdHost = st.host_brain?.fallback_command || "powershell -ExecutionPolicy Bypass -File scripts\\start-host-brain-agent.ps1";
+      const bAll = el("button", "Copy lệnh khởi động hợp nhất (Start-AIMemoryHub.ps1)", "secondary");
+      bAll.type = "button";
+      bAll.style.marginTop = "0";
+      bAll.addEventListener("click", () => { navigator.clipboard?.writeText(cmdAll); toast("Đã sao chép lệnh Start-AIMemoryHub.ps1"); });
+      const bHost = el("button", "Copy lệnh bật Host Brain Agent", "secondary");
+      bHost.type = "button";
+      bHost.style.marginTop = "0";
+      bHost.addEventListener("click", () => { navigator.clipboard?.writeText(cmdHost); toast("Đã sao chép lệnh start-host-brain-agent.ps1"); });
+      actions.append(bAll, bHost);
+      actions.append(el("small", "Dashboard chạy trong Docker nên không tự chạy lệnh shell trên Windows host (chạy lệnh trên tại PowerShell Windows).", "trace-muted"));
+      body.append(actions);
+    } catch (e) {
+      body.textContent = "Lỗi kiểm tra trạng thái hệ thống: " + e.message;
+    }
+  }
+
   async function loadAgentControlCenter() {
+    loadHostHealthCard();
     const tblBox = $("agent-controls-table");
     if (!tblBox) return;
     try {
@@ -644,6 +688,7 @@
 
   window.addEventListener("hub-ready", () => {
     $("agent-controls-refresh")?.addEventListener("click", loadAgentControlCenter);
+    $("agent-host-health-refresh")?.addEventListener("click", loadHostHealthCard);
     $("agent-model-source-filter")?.addEventListener("change", renderAgentModelsTable);
   });
 

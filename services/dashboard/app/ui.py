@@ -371,8 +371,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <!-- 7b. Agent Control Center (P19A.2: Agent/Model Enable-Disable, Quota & Active Sessions) -->
+    <!-- 7b. Agent Control Center (P19A.2 + P16B.4: System/Host Health, Agent/Model Enable-Disable, Quota & Active Sessions) -->
     <section id="tab-agents" class="panel"><h2>Agent Control Center</h2>
+      <div class="card" id="agent-host-health-card" style="margin-bottom:14px">
+        <div class="row-actions" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <h3 style="margin:0">Trạng thái Hệ thống Docker &amp; Host Brain Agent (P16B.4)</h3>
+          <button class="secondary" id="agent-host-health-refresh" type="button" style="margin-top:0">Kiểm tra lại kết nối</button>
+        </div>
+        <div id="agent-host-health-body" class="trace-muted" style="margin-top:8px">Đang kiểm tra trạng thái Docker và Host Brain Agent...</div>
+      </div>
       <div class="card" style="margin-bottom:14px">
         <div class="row-actions" style="justify-content:space-between;margin-bottom:8px">
           <h3 style="margin:0">Quản lý Agent, Model &amp; Hạn mức Quota (Thuê bao · API · Cục bộ)</h3>

@@ -99,6 +99,9 @@ try {
     $opts = Invoke-RestMethod -Uri "$bridge/v2/traces/scope-options?project_id=20ef268d-5a07-43a7-a66f-8a83e87dd0f7&source=all" -Headers $readHdr -TimeoutSec 15
     $extCnt = @($opts.plans | Where-Object { $_.is_monitor_only -eq $true }).Count
     Record-Gate 'Adapters, Providers & Plans' 'PASS' "Adapters=$(@($ra.adapters).Count), Providers=$(@($provs.items).Count), Unified plans=$(@($opts.plans).Count) (external=$extCnt)"
+    $stDash = Invoke-RestMethod -Uri "$dash/api/status" -TimeoutSec 10
+    $p16b4ScriptsOk = (Test-Path 'scripts\Start-AIMemoryHub.ps1') -and (Test-Path 'scripts\Stop-AIMemoryHub.ps1') -and (Test-Path 'scripts\Status-AIMemoryHub.ps1') -and (Test-Path 'scripts\Set-AIMemoryHubAutoStart.ps1')
+    Record-Gate 'P16B.4 Unified Startup & Host Link' $(if ($p16b4ScriptsOk -and $stDash.host_brain.ready) { 'PASS' } else { 'BLOCKED' }) "Launchers=$p16b4ScriptsOk, Hub->Host=$($stDash.host_brain.label)"
     Record-Gate 'Live Paid API Smoke' 'BLOCKED' 'No explicit paid API spend consent/keys enabled by default (mock/isolated tests cover all flows at $0)'
 
     if ($RunTests) {
