@@ -951,6 +951,7 @@ class V2BridgeService:
                 "revisions": [dict(r) for r in revs],
                 "tasks": [dict(t) for t in tasks],
                 "approvals": [dict(a) for a in approvals],
+                "dependencies": [dict(x) for x in conn.execute("SELECT d.task_id, d.depends_on_task_id FROM v2_task_dependencies d JOIN v2_tasks t ON t.id=d.task_id WHERE t.plan_id=? AND t.revision_id=?", (plan_id, plan["current_revision_id"]))],
                 "forecast": json.loads(forecast["forecast_json"]) if (forecast := conn.execute(
                     "SELECT f.forecast_json FROM v2_forecast_snapshots f JOIN v2_plan_revisions r "
                     "ON r.forecast_id=f.id WHERE r.id=? AND f.project_id=?",
@@ -1203,7 +1204,6 @@ class V2BridgeService:
 
         with self.db.write_tx() as conn:
             worktree = self._ensure_worktree(conn, pid, wid)
-            self.db.expire_leases(conn, now)
             policy = self._get_policy_row(conn, pid)
             if policy["kill_switch"]:
                 raise BridgeError(403, "kill_switch_active", "Project kill switch is active")
@@ -1661,6 +1661,7 @@ class V2BridgeService:
         from_date: str | None = None,
         to_date: str | None = None,
     ) -> dict[str, Any]:
+        self._reconcile_expired_leases()
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)
             clauses = ["s.project_id = ?"]

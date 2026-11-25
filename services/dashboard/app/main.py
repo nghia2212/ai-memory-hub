@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 from pathlib import Path
+from uuid import UUID
 import hmac
 from typing import Any
 
@@ -724,6 +725,10 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             params={"project_id": project_id},
             json_body=body,
         )
+
+    @app.get("/api/v2/session-detail")
+    async def api_v21_session_detail(session_id: UUID, project_id: UUID) -> JSONResponse:
+        return await _proxy_bridge("GET", f"/v2/sessions/{session_id}", params={"project_id": str(project_id)})
 
     @app.get("/api/v2/sessions")
     async def api_v2_sessions(project_id: str, complexity: str = "", outcome: str = "") -> JSONResponse:

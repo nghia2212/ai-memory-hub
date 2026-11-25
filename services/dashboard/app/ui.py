@@ -229,7 +229,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="explorer-layout"><aside class="card"><h3>Thư mục</h3><button id="tree-root" class="secondary">Mở thư mục gốc</button>
       <p id="tree-path"></p><div id="tree-files"></div></aside><article class="card"><h3 id="source-title">Mã nguồn</h3>
       <div id="index-meta"></div><div id="source-actions" class="row-actions"></div><pre id="source-text"></pre>
-      <div id="symbol-list"></div><div id="call-graph"></div></article></div>
+      <div id="symbol-list"></div><label>Symbol cần trace</label><input id="graph-symbol" maxlength="512"><label>Độ sâu</label><select id="graph-depth"><option>1</option><option>2</option><option>3</option></select><button id="graph-run" class="secondary">Trace / Impact</button><div id="call-graph"></div></article></div>
     </section>
 
     <!-- 4. Duyệt bộ nhớ -->
@@ -361,7 +361,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <section id="tab-agents" class="panel"><h2>Agent Control Center</h2>
       <div class="card"><div class="grid"><label>Dự án<select id="agents-proj"></select></label>
       <label>Lọc model, trạng thái hoặc agent<input id="agent-filter" type="search"></label></div>
-      <button class="secondary" id="agent-refresh">Cập nhật</button><p id="agent-counts"></p><div id="agent-rows"></div></div>
+      <button class="secondary" id="agent-refresh">Cập nhật</button><p id="agent-counts"></p><div id="agent-rows"></div><div id="agent-detail"></div></div>
     </section>
     <section id="tab-plans" class="panel">
       <h2>Giao công việc</h2><div class="work-layout"><aside class="card"><h3>Lịch sử</h3>
@@ -444,7 +444,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- 9. Thống kê & Chi phí -->
     <section id="tab-metrics" class="panel">
       <div class="card">
-        <h2>Thống kê hiệu năng & Token thực tế</h2>
+        <h2>Thống kê hiệu năng & Token thực tế</h2><label>Dự án</label><select id="metrics-proj"></select>
         <button class="secondary" onclick="loadMetrics()">Làm mới số liệu</button>
         <div id="metrics-view" style="margin-top:12px"></div>
       </div>
@@ -631,7 +631,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const data = await apiFetch("/api/projects");
         projectsCache = data.items || [];
-        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj", "agents-proj"];
+        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj", "agents-proj", "metrics-proj"];
         for (const sid of selects) {
           const sel = document.getElementById(sid);
           const prev = sel.value;

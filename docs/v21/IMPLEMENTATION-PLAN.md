@@ -30,3 +30,6 @@ Docker stats (một mẫu, không phải peak): Bridge 76.79 MiB / 0.12% CPU, Da
 
 ### Tiếp quản từ Codex — checkpoint M1
 Đã sửa source: giữ lease còn hạn khi Bridge restart, quarantine attempt hết hạn thành orphaned/blocked và pause plan (không tự chạy lại), từ chối heartbeat sai runner hoặc lease hết hạn, chặn revision/resume khi outcome chưa rõ. Budget reservation giữ nguyên để đối soát. Reconcile khi startup, đọc plan hoặc claim. Thêm regression test synthetic. Không có quyền truy cập runtime laptop trong phiên GitHub này; test chưa chạy, chưa deploy. Còn cần UI hiển thị nguyên nhân blocked, quy trình owner reconciliation/settlement, kiểm tra pause/cancel propagation, actual result/telemetry và các milestone còn lại. Không merge main.
+
+### Checkpoint Workbench UI
+Restored missing workbench.js/css referenced by Codex; added real scoped tree/source/outline/trace evidence, history/detail, agent session monitor, V2 usage table, responsive sidebar, dependency list, unified lease expiration. Trace is evidence table, not full interactive graph. Read-only host dispatch remains limited; attachments, safe write execution, external telemetry, self-onboarding and real Windows QA remain open. No tests executed in GitHub connector session.

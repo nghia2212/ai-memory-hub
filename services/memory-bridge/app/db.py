@@ -668,30 +668,7 @@ class DatabaseManager:
 
     @staticmethod
     def expire_leases(conn: sqlite3.Connection, now: str) -> None:
-        rows = conn.execute(
-            """SELECT l.lease_id, l.attempt_id, t.id AS task_id, t.plan_id, t.revision_id
-               FROM v2_job_leases l JOIN v2_tasks t ON t.id=l.task_id
-               WHERE l.released_at IS NULL AND julianday(l.expires_at) <= julianday(?)""",
-            (now,),
-        ).fetchall()
-        for row in rows:
-            conn.execute("UPDATE v2_job_leases SET released_at=? WHERE lease_id=?", (now, row["lease_id"]))
-            conn.execute(
-                "UPDATE v2_task_attempts SET status='orphaned', ended_at=?, error_code='lease_expired', "
-                "error_summary='Execution outcome unknown' WHERE id=?", (now, row["attempt_id"]),
-            )
-            conn.execute(
-                "UPDATE v2_sessions SET status='partial', incomplete_coverage=1, ended_at=? "
-                "WHERE attempt_id=? AND status='running'", (now, row["attempt_id"]),
-            )
-            conn.execute(
-                "UPDATE v2_tasks SET state='blocked', updated_at=? WHERE id=? AND state IN ('leased','running')",
-                (now, row["task_id"]),
-            )
-            conn.execute(
-                "UPDATE v2_plans SET status='PAUSED', updated_at=? WHERE id=? AND current_revision_id=? "
-                "AND status='RUNNING'", (now, row["plan_id"], row["revision_id"]),
-            )
+        reconcile_expired_job_leases(conn, now)
 
     def reconcile_expired_leases(self) -> None:
         with self.write_tx() as conn:
