@@ -452,3 +452,80 @@ def test_p19a3_codex_and_claude_model_discovery_auth_states_and_reasoning_levels
     assert srcs["claude_code"]["models"][0]["eligible"] is False
     assert "Chưa đăng nhập" in (srcs["claude_code"]["models"][0]["ineligible_reason"] or "")
 
+
+def test_p19a4_automatic_quota_windows_advisory_and_manual_precedence(client):
+    """P19A.4: Verify Codex 5h + 7d shared quota windows, advisory tiers, expired reset -> unknown (never auto-recovered),
+    and manual override precedence."""
+    quota_status = client.app.state.v321_subscription_service.list_execution_sources.__globals__["quota_status"]
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        {
+            "provider": "codex",
+            "auth_mode": "subscription_cli",
+            "account_bucket": "window:5h",
+            "quota_kind": "subscription_quota",
+            "unit": "percent_used",
+            "numerator": 1.0,
+            "denominator": 100.0,
+            "window_label": "5h",
+            "reset_at": (now + timedelta(hours=4)).isoformat().replace("+00:00", "Z"),
+            "source": "codex_local_rate_limits",
+            "confounded": False,
+            "observed_at": (now - timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+        },
+        {
+            "provider": "codex",
+            "auth_mode": "subscription_cli",
+            "account_bucket": "window:7d",
+            "quota_kind": "subscription_quota",
+            "unit": "percent_used",
+            "numerator": 16.0,
+            "denominator": 100.0,
+            "window_label": "7d",
+            "reset_at": (now + timedelta(days=5)).isoformat().replace("+00:00", "Z"),
+            "source": "codex_local_rate_limits",
+            "confounded": False,
+            "observed_at": (now - timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+        },
+    ]
+    st = quota_status(rows, "codex", "gpt-6.2-sol", "subscription_cli", now=now)
+    assert st["state"] == "observed_available"
+    assert st["advisory"] == "normal"
+    assert st["remaining_pct"] == 84.0
+    assert len(st["windows"]) == 2
+    assert {w["window_label"] for w in st["windows"]} == {"5h", "7d"}
+
+    # Manual override exhaustion takes precedence over shared positive windows
+    rows_manual = rows + [
+        {
+            "provider": "codex",
+            "auth_mode": "subscription_cli",
+            "account_bucket": "model:gpt-6.2-sol",
+            "quota_kind": "subscription_quota",
+            "unit": "availability_flag",
+            "numerator": 1,
+            "denominator": 1,
+            "reset_at": (now + timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+            "source": "manual_user_confirmation",
+            "confounded": False,
+            "observed_at": now.isoformat().replace("+00:00", "Z"),
+        }
+    ]
+    st_m = quota_status(rows_manual, "codex", "gpt-6.2-sol", "subscription_cli", now=now)
+    assert st_m["state"] == "exhausted"
+    assert st_m["advisory"] == "blocked"
+
+    # Reset time passed without newer observation -> NEVER auto-declared observed_available (must be unknown)
+    rows_expired = [
+        {
+            **rows[0],
+            "numerator": 100.0,
+            "reset_at": (now - timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
+            "observed_at": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+        }
+    ]
+    st_exp = quota_status(rows_expired, "codex", "gpt-6.2-sol", "subscription_cli", now=now)
+    assert st_exp["state"] == "unknown"
+
+

@@ -1461,6 +1461,11 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("PUT", f"/v321/projects/{project_id}/chat-defaults", use_admin=True, json_body=await request.json())
 
+    @app.post("/api/v321/quotas/sync")
+    async def api_v321_sync_quotas(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_host_brain("POST", "/host/sync-quotas", json_body={}, timeout=20.0)
+
     # --- V3.2.1 P16B Persistent Task & Auto Recovery Proxy Routes (all auth/CSRF enforced) ---
     @app.get("/api/v321/projects/{project_id}/recovery-policy")
     async def api_v321_get_recovery_policy(project_id: str, request: Request) -> JSONResponse:

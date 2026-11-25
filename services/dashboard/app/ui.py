@@ -385,6 +385,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <h3 style="margin:0">Quản lý Agent, Model &amp; Hạn mức Quota (Thuê bao · API · Cục bộ)</h3>
           <div class="row-actions">
             <button class="secondary" id="agent-sync-catalog-btn" type="button" onclick="syncCatalog()">Đồng bộ model từ Host CLI</button>
+            <button class="secondary" id="agent-sync-quota-btn" type="button">Đồng bộ Quota</button>
             <button class="secondary" id="agent-controls-refresh" type="button">Làm mới cấu hình</button>
           </div>
         </div>

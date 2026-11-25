@@ -513,11 +513,15 @@
     for (const { src, m } of rows) {
       const tr = document.createElement("tr");
       const qst = m.quota?.state || "unknown";
+      const winParts = (m.quota?.windows || []).map(w => `${w.window_label}: còn ${w.remaining_pct}% (reset ${vnTime(w.reset_at)})`);
+      const qDisplay = winParts.length
+        ? `${QUOTA_LABEL[qst] || qst} · ${winParts.join(" | ")}`
+        : `${QUOTA_LABEL[qst] || qst}${m.quota?.source ? " (" + m.quota.source + ")" : ""}`;
       tr.append(
         el("td", src.display_name),
         el("td", m.model_id),
         el("td", m.admin_enabled ? "Đang bật" : `Đã tắt${m.disabled_reason ? " (" + m.disabled_reason + ")" : ""}`),
-        el("td", `${QUOTA_LABEL[qst] || qst}${m.quota?.source ? " (" + m.quota.source + ")" : ""}`),
+        el("td", qDisplay),
         el("td", vnTime(m.quota?.reset_at)),
         el("td", m.eligible ? "Sẵn sàng" : (m.ineligible_reason || "Bị chặn"))
       );
@@ -699,6 +703,14 @@
   window.addEventListener("hub-ready", () => {
     $("agent-controls-refresh")?.addEventListener("click", loadAgentControlCenter);
     $("agent-host-health-refresh")?.addEventListener("click", loadHostHealthCard);
+    $("agent-sync-quota-btn")?.addEventListener("click", async () => {
+      try {
+        toast("Đang đồng bộ quota từ các CLI trên Windows host (0 LLM)...");
+        const res = await apiFetch("/api/v321/quotas/sync", { method: "POST", body: JSON.stringify({}) });
+        toast(`Đã đồng bộ ${res.recorded_snapshots ?? 0} cửa sổ quota thực tế.`);
+        await loadAgentControlCenter();
+      } catch (e) { toast("Lỗi đồng bộ quota: " + e.message); }
+    });
     $("agent-model-source-filter")?.addEventListener("change", renderAgentModelsTable);
   });
 

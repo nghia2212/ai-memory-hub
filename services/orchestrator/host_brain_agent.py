@@ -515,6 +515,141 @@ def discover_host_clis() -> dict[str, Any]:
     }
 
 
+_QUOTA_SYNC_LOCK = threading.Lock()
+
+
+def discover_host_quotas() -> dict[str, Any]:
+    """P19A.4: Read-only, 0-LLM, 0-cost quota discovery from official local CLI telemetry.
+
+    - Codex CLI: reads latest `payload.rate_limits` (5h & 7d windows) from ~/.codex/sessions/**/*.jsonl.
+      Never reads secrets, prompts or private OAuth tokens.
+    - Antigravity / Claude / Gemini: honestly report unsupported automatic quota API (use manual/error obs).
+    """
+    now = utc_now_iso()
+    snapshots: list[dict[str, Any]] = []
+    adapters: list[dict[str, Any]] = []
+
+    # 1. Codex CLI local rate_limits (5h primary + 7d secondary windows)
+    sessions_dir = Path.home() / ".codex" / "sessions"
+    codex_found = False
+    if sessions_dir.is_dir():
+        try:
+            files = sorted(sessions_dir.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
+            for fpath in files:
+                try:
+                    lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+                except Exception:
+                    continue
+                for line in reversed(lines):
+                    if '"rate_limits"' not in line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    payload = ev.get("payload") if isinstance(ev, dict) else None
+                    rl = payload.get("rate_limits") if isinstance(payload, dict) else None
+                    if not isinstance(rl, dict):
+                        continue
+                    obs_ts = str(ev.get("timestamp") or now)
+                    for key_name, default_label in (("primary", "5h"), ("secondary", "7d")):
+                        win = rl.get(key_name)
+                        if not isinstance(win, dict) or win.get("used_percent") is None:
+                            continue
+                        wmin = win.get("window_minutes")
+                        if wmin == 300:
+                            wlabel = "5h"
+                        elif wmin == 10080:
+                            wlabel = "7d"
+                        elif isinstance(wmin, int) and wmin > 0:
+                            wlabel = f"{wmin}m"
+                        else:
+                            wlabel = default_label
+                        reset_iso = None
+                        if isinstance(win.get("resets_at"), (int, float)) and win["resets_at"] > 0:
+                            reset_iso = datetime.fromtimestamp(float(win["resets_at"]), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                        used_pct = max(0.0, min(100.0, float(win["used_percent"])))
+                        snapshots.append(
+                            {
+                                "provider": "codex",
+                                "auth_mode": "subscription_cli",
+                                "account_bucket": f"window:{wlabel}",
+                                "quota_kind": "subscription_quota",
+                                "unit": "percent_used",
+                                "numerator": round(used_pct, 2),
+                                "denominator": 100.0,
+                                "window_label": wlabel,
+                                "reset_at": reset_iso,
+                                "source": "codex_local_rate_limits",
+                                "confounded": False,
+                                "observed_at": obs_ts,
+                            }
+                        )
+                        codex_found = True
+                    if codex_found:
+                        break
+                if codex_found:
+                    break
+        except Exception:
+            pass
+
+    adapters.append(
+        {
+            "provider": "codex",
+            "supported": True,
+            "status": "observed" if codex_found else "no_recent_session",
+            "source": "codex_local_rate_limits",
+            "detail": f"Đã đọc {len(snapshots)} cửa sổ hạn mức từ Codex CLI (0 LLM, 0 phí)." if codex_found else "Chưa có phiên Codex gần đây chứa rate_limits.",
+        }
+    )
+    adapters.append(
+        {
+            "provider": "agy",
+            "supported": False,
+            "status": "unsupported",
+            "source": "manual_or_error_observation",
+            "detail": "Antigravity CLI chưa cung cấp lệnh đọc % quota tự động; dùng xác nhận thủ công hoặc phát hiện lỗi quota.",
+        }
+    )
+    adapters.append(
+        {
+            "provider": "claude",
+            "supported": False,
+            "status": "unsupported",
+            "source": "manual_or_error_observation",
+            "detail": "Claude Code CLI chưa cung cấp endpoint đọc % quota tự động; dùng xác nhận thủ công hoặc phát hiện lỗi quota.",
+        }
+    )
+
+    return {"discovered_at": now, "snapshots": snapshots, "adapters": adapters}
+
+
+def sync_quotas_to_bridge(env: dict[str, str]) -> dict[str, Any]:
+    """Single-flight quota sync from Host Brain Agent to Memory Bridge /v2/quotas (0 LLM, 0 cost)."""
+    if not _QUOTA_SYNC_LOCK.acquire(blocking=False):
+        return {"ok": True, "skipped": True, "reason": "single_flight_in_progress"}
+    try:
+        disc = discover_host_quotas()
+        recorded = 0
+        errors: list[str] = []
+        for snap in disc["snapshots"]:
+            code, resp = _bridge_request(env, "POST", "/v2/quotas", token_key="BRIDGE_RUNNER_TOKEN", body=snap)
+            if code in (200, 201):
+                recorded += 1
+            else:
+                errors.append(f"{snap['provider']}/{snap['window_label']}: HTTP {code}")
+        return {
+            "ok": len(errors) == 0,
+            "synced_at": utc_now_iso(),
+            "recorded_snapshots": recorded,
+            "adapters": disc["adapters"],
+            "snapshots": disc["snapshots"],
+            "errors": errors,
+        }
+    finally:
+        _QUOTA_SYNC_LOCK.release()
+
+
 def sync_catalog_to_bridge(env: dict[str, str]) -> dict[str, Any]:
     disc = discover_host_clis()
     payload = {
@@ -1028,6 +1163,9 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
             if self.path == "/host/clis":
                 self._send(200, discover_host_clis())
                 return
+            if self.path == "/host/quotas":
+                self._send(200, discover_host_quotas())
+                return
             self._send(404, {"error": {"code": "not_found", "message": "Not found"}})
 
         def do_POST(self) -> None:
@@ -1042,6 +1180,11 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
 
             if self.path == "/host/discover":
                 res = sync_catalog_to_bridge(env)
+                self._send(200 if res["ok"] else 502, res)
+                return
+
+            if self.path == "/host/sync-quotas":
+                res = sync_quotas_to_bridge(env)
                 self._send(200 if res["ok"] else 502, res)
                 return
 
@@ -1391,6 +1534,10 @@ def _periodic_sync_loop(env: dict[str, str], interval_sec: int, stop_ev: threadi
         if now_m - last_sync >= interval_sec:
             try:
                 sync_catalog_to_bridge(env)
+            except Exception:
+                pass
+            try:
+                sync_quotas_to_bridge(env)
             except Exception:
                 pass
             last_sync = now_m
