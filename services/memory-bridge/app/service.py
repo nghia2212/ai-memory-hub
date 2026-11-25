@@ -974,7 +974,7 @@ class MemoryBridgeService:
         if self.settings.codebase_url:
             headers = self._codebase_headers(admin=False)
             try:
-                with httpx.Client(timeout=10.0) as client:
+                with httpx.Client(timeout=30.0) as client:
                     resp = client.post(
                         f"{self.settings.codebase_url.rstrip('/')}/v1/search/code",
                         json=req.model_dump(mode="json"),

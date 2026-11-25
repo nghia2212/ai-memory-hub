@@ -122,13 +122,49 @@ def resolve_safe_path(container_root: Path, raw_rel_path: str) -> tuple[str, Pat
     return rel_posix, candidate_real
 
 
+_EXCLUDED_DIR_NAMES: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".codebase-memory",
+        "node_modules",
+        "dist",
+        "build",
+        ".cache",
+        ".tmp",
+        ".wrangler",
+        "__pycache__",
+        ".venv",
+        "outputs",
+        "art-in",
+        "art-src",
+        "trao-doi-anh",
+        "test-results",
+    }
+)
+_EXCLUDED_EXTS: frozenset[str] = frozenset(
+    {
+        ".glb", ".gltf", ".blend", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico",
+        ".mp3", ".ogg", ".wav", ".mp4", ".webm", ".zip", ".woff", ".woff2", ".ttf",
+        ".otf", ".pdf", ".log", ".pem", ".key",
+    }
+)
+
+
 def is_excluded_path(rel_posix_path: str, extra_excludes: list[str] | None = None) -> bool:
     """Return True if path matches built-in secret/dependency exclusions or project excludes."""
-    patterns = list(DEFAULT_EXCLUDES)
-    if extra_excludes:
-        patterns.extend(extra_excludes)
+    parts = rel_posix_path.split("/")
+    for seg in parts:
+        low = seg.lower()
+        if low in _EXCLUDED_DIR_NAMES or low.startswith("test-results-") or low == ".env" or low.startswith(".env.") or "credentials" in low:
+            return True
+    last = parts[-1].lower()
+    dot = last.rfind(".")
+    if dot > 0 and last[dot:] in _EXCLUDED_EXTS:
+        return True
+    if not extra_excludes:
+        return False
     pure = PurePosixPath(rel_posix_path)
-    for pat in patterns:
+    for pat in extra_excludes:
         norm_pat = pat.replace("\\", "/")
         if norm_pat.startswith("./"):
             norm_pat = norm_pat[2:]

@@ -289,20 +289,24 @@ class CodebaseService:
 
         escaped_pattern = f".*{re.escape(req.query)}.*"
         try:
-            graph_res, code_res = await asyncio.gather(
-                self._cbm.search_graph(
-                    project_name=cbm_project,
-                    name_pattern=escaped_pattern,
-                    limit=req.limit,
-                    timeout=self._settings.query_timeout_sec,
-                ),
-                self._cbm.search_code(
+            # Query indexed AST graph first (milliseconds on local SQLite); only fall back
+            # to raw text search if graph results are empty (avoids slow 9p full-tree scans).
+            graph_res = await self._cbm.search_graph(
+                project_name=cbm_project,
+                name_pattern=escaped_pattern,
+                limit=req.limit,
+                timeout=self._settings.query_timeout_sec,
+            )
+            has_graph_hits = any(bool(g.get("rows")) for g in (graph_res.get("groups") or []))
+            if has_graph_hits:
+                code_res: dict[str, Any] = {}
+            else:
+                code_res = await self._cbm.search_code(
                     project_name=cbm_project,
                     pattern=req.query,
                     limit=req.limit,
                     timeout=self._settings.query_timeout_sec,
-                ),
-            )
+                )
         except (CBMClientError, asyncio.TimeoutError) as exc:
             raise HTTPException(
                 status_code=503,

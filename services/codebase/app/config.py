@@ -26,7 +26,7 @@ class Settings:
     read_tokens: set[str] = field(default_factory=set)
     admin_tokens: set[str] = field(default_factory=set)
     allow_unauth_dev: bool = False
-    query_timeout_sec: float = 10.0
+    query_timeout_sec: float = 25.0
     index_timeout_sec: float = 120.0
 
     @classmethod
@@ -48,6 +48,6 @@ class Settings:
             read_tokens=_parse_tokens(os.environ.get("CODEBASE_READ_TOKENS")),
             admin_tokens=_parse_tokens(os.environ.get("CODEBASE_ADMIN_TOKENS")),
             allow_unauth_dev=os.environ.get("ALLOW_UNAUTH_DEV", "").lower() in ("1", "true", "yes"),
-            query_timeout_sec=float(os.environ.get("QUERY_TIMEOUT_SEC", "10.0")),
+            query_timeout_sec=float(os.environ.get("QUERY_TIMEOUT_SEC", "25.0")),
             index_timeout_sec=float(os.environ.get("INDEX_TIMEOUT_SEC", "120.0")),
         )
