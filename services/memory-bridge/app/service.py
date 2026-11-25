@@ -78,6 +78,9 @@ def _enforce_serialized_budget(
     return build_envelope(current_items, True)
 
 
+from .trace_operations import observe_operation
+
+
 class MemoryBridgeService:
     def __init__(self, db: DatabaseManager, settings: Settings) -> None:
         self.db = db
@@ -425,6 +428,7 @@ class MemoryBridgeService:
         }
 
     # --- Context ---
+    @observe_operation("get_project_context", "ai_memory", memory=True)
     def get_project_context(self, project_id: str, worktree_id: str) -> dict[str, Any]:
         t0 = time.perf_counter()
         with self.db.read_conn() as conn:
@@ -482,6 +486,7 @@ class MemoryBridgeService:
         return envelope
 
     # --- Memories & FTS5 ---
+    @observe_operation("save_memory", "save_memory", memory=True)
     def create_memory(self, req: MemoryCreateRequest) -> tuple[int, dict[str, Any]]:
         project_id = str(req.project_id)
         worktree_id = str(req.worktree_id) if req.worktree_id else None
@@ -613,6 +618,7 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
+    @observe_operation("search_memory", "ai_memory", memory=True)
     def search_memory(self, req: MemorySearchRequest) -> dict[str, Any]:
         t0 = time.perf_counter()
         project_id = str(req.project_id)
@@ -834,6 +840,7 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
+    @observe_operation("save_memory", "save_memory", memory=True)
     def submit_worker_result(self, req: WorkerResultRequest) -> tuple[int, dict[str, Any]]:
         project_id = str(req.project_id)
         worktree_id = str(req.worktree_id)
@@ -915,6 +922,7 @@ class MemoryBridgeService:
         return 201, resp
 
     # --- Handoffs ---
+    @observe_operation("save_handoff", "handoff", memory=True)
     def save_handoff(self, req: HandoffCreateRequest) -> tuple[int, dict[str, Any]]:
         project_id = str(req.project_id)
         worktree_id = str(req.worktree_id)
@@ -962,6 +970,7 @@ class MemoryBridgeService:
             self._save_idempotency(conn, scope_key, req.idempotency_key, payload_hash, 201, resp)
             return 201, resp
 
+    @observe_operation("get_handoff", "ai_memory", memory=True)
     def get_handoff(self, task_id: str, project_id: str, worktree_id: str) -> dict[str, Any]:
         with self.db.read_conn() as conn:
             self._ensure_worktree(conn, project_id, worktree_id)
@@ -1038,6 +1047,7 @@ class MemoryBridgeService:
                     (head_commit, dirty_fp, updated_at, worktree_id, project_id),
                 )
 
+    @observe_operation("search_code", "code_search", memory=False)
     def search_code(self, req: CodeSearchRequest) -> dict[str, Any]:
         t0 = time.perf_counter()
         project_id = str(req.project_id)
@@ -1077,6 +1087,7 @@ class MemoryBridgeService:
 
         raise BridgeError(503, "codebase_unavailable", "Codebase search service is unavailable")
 
+    @observe_operation("reindex", "code_search", memory=False)
     def trigger_index(self, req: IndexTriggerRequest) -> dict[str, Any]:
         project_id = str(req.project_id)
         worktree_id = str(req.worktree_id)
