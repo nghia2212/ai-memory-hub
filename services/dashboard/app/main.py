@@ -797,6 +797,11 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v2_calibration(project_id: str) -> JSONResponse:
         return await _proxy_bridge("GET", "/v2/analytics/calibration", params={"project_id": project_id})
 
+    @app.post("/api/v2/quotas")
+    async def api_v2_quota_update(request: Request):
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v2/quotas", use_admin=True, json_body=await request.json())
+
     @app.get("/api/v2/quotas")
     async def api_v2_quotas() -> JSONResponse:
         return await _proxy_bridge("GET", "/v2/quotas")
