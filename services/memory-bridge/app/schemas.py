@@ -18,6 +18,16 @@ class ProjectCreateRequest(StrictModel):
     hermes_approved: bool = False
 
 
+class ProjectHermesUpdateRequest(StrictModel):
+    hermes_approved: bool
+
+
+class HermesConfigUpdateRequest(StrictModel):
+    enabled: bool
+    provider: Literal["mock", "deepseek", "hermes_gateway"] = "deepseek"
+    allow_paid_deepseek: bool = False
+
+
 class WorktreeCreateRequest(StrictModel):
     canonical_root: str = Field(min_length=1, max_length=1024)
     branch: str | None = Field(default=None, max_length=256)

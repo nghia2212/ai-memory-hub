@@ -36,9 +36,147 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 r = await client.get(f"{url.rstrip('/')}/healthz")
                 data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-                return {"ready": r.status_code == 200, "status_code": r.status_code, **data}
+                ready = r.status_code == 200 and bool(data.get("ready", True))
+                if ready:
+                    return {
+                        "ready": True,
+                        "state": "active",
+                        "label": "Đang hoạt động",
+                        "status_code": r.status_code,
+                        **data,
+                    }
+                return {
+                    "ready": False,
+                    "state": "unreachable",
+                    "label": "Lỗi kết nối",
+                    "status_code": r.status_code,
+                    **data,
+                }
         except Exception:
-            return {"ready": False, "status": "unreachable"}
+            return {
+                "ready": False,
+                "state": "unreachable",
+                "label": "Lỗi kết nối",
+                "status": "unreachable",
+                "detail": "Không thể kết nối tới endpoint /healthz của dịch vụ.",
+            }
+
+    async def _fetch_hermes_runtime_config() -> dict[str, Any]:
+        default_cfg = {
+            "enabled": cfg.hermes_enabled,
+            "provider": cfg.hermes_provider,
+            "allow_paid_deepseek": False,
+            "source": "env",
+            "updated_at": None,
+        }
+        token = cfg.bridge_read_token or cfg.bridge_admin_token
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(f"{cfg.bridge_url.rstrip('/')}/v1/hermes/config", headers=headers)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data.get("source") == "admin_override":
+                        return data
+                    # If no admin override exists yet, honor env HERMES_ENABLED / HERMES_PROVIDER
+                    return {
+                        **data,
+                        "enabled": cfg.hermes_enabled,
+                        "provider": cfg.hermes_provider,
+                    }
+        except Exception:
+            pass
+        return default_cfg
+
+    async def _probe_hermes_status() -> dict[str, Any]:
+        hcfg = await _fetch_hermes_runtime_config()
+        enabled = bool(hcfg.get("enabled", False))
+        provider = str(hcfg.get("provider") or cfg.hermes_provider or "deepseek")
+        allow_paid = bool(hcfg.get("allow_paid_deepseek", False))
+        deepseek_key_set = bool(cfg.deepseek_api_key_set)
+        meta = {
+            "enabled": enabled,
+            "provider": provider,
+            "deepseek_configured": deepseek_key_set,
+            "allow_paid_deepseek": allow_paid,
+            "config_source": hcfg.get("source", "env"),
+        }
+        if not enabled:
+            return {
+                "ready": False,
+                "state": "disabled",
+                "label": "Đã tắt",
+                "status": "disabled",
+                "detail": "Hermes Worker đang chủ động tắt (mặc định an toàn, không gọi API trả phí).",
+                **meta,
+            }
+        if provider == "deepseek" and (not deepseek_key_set or not allow_paid):
+            reason = (
+                "Hermes đã bật nhưng chưa cấu hình DEEPSEEK_API_KEY (không tự kích hoạt DeepSeek API trả phí)."
+                if not deepseek_key_set
+                else "Hermes đã bật nhưng chưa cấp phép dùng DeepSeek API trả phí (allow_paid_deepseek=false)."
+            )
+            return {
+                "ready": False,
+                "state": "unconfigured",
+                "label": "Chưa cấu hình",
+                "status": "unconfigured",
+                "detail": reason,
+                **meta,
+            }
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(f"{cfg.hermes_url.rstrip('/')}/healthz")
+                data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+                raw_status = str(data.get("status") or "")
+                if raw_status == "disabled" or data.get("enabled") is False:
+                    return {
+                        "ready": False,
+                        "state": "disabled",
+                        "label": "Đã tắt",
+                        "status": "disabled",
+                        "status_code": r.status_code,
+                        "detail": "Container Hermes đang chạy ở chế độ tắt (HERMES_ENABLED=false).",
+                        **meta,
+                    }
+                if raw_status.startswith("missing_") or raw_status.startswith("invalid_"):
+                    return {
+                        "ready": False,
+                        "state": "unconfigured",
+                        "label": "Chưa cấu hình",
+                        "status": raw_status,
+                        "status_code": r.status_code,
+                        "detail": f"Hermes thiếu cấu hình provider: {raw_status}.",
+                        **meta,
+                    }
+                if r.status_code == 200 and data.get("ready"):
+                    return {
+                        "ready": True,
+                        "state": "active",
+                        "label": "Đang hoạt động",
+                        "status": raw_status or "ok",
+                        "status_code": r.status_code,
+                        "detail": f"Hermes Worker đang hoạt động (provider={provider}).",
+                        **meta,
+                    }
+                return {
+                    "ready": False,
+                    "state": "unreachable",
+                    "label": "Lỗi kết nối",
+                    "status": raw_status or "error",
+                    "status_code": r.status_code,
+                    "detail": f"Hermes trả về mã HTTP {r.status_code}.",
+                    **meta,
+                }
+        except Exception:
+            return {
+                "ready": False,
+                "state": "unreachable",
+                "label": "Lỗi kết nối",
+                "status": "unreachable",
+                "detail": "Hermes đã bật nhưng container không phản hồi (chạy `docker compose --profile hermes up -d` nếu cần chạy worker).",
+                **meta,
+            }
 
     async def _proxy_bridge(
         method: str,
@@ -118,8 +256,28 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return {
             "bridge": await _probe_health(cfg.bridge_url),
             "codebase": await _probe_health(cfg.codebase_url),
-            "hermes": await _probe_health(cfg.hermes_url),
+            "hermes": await _probe_hermes_status(),
         }
+
+    @app.get("/api/hermes/config")
+    async def api_hermes_config() -> dict[str, Any]:
+        hcfg = await _fetch_hermes_runtime_config()
+        status = await _probe_hermes_status()
+        return {**hcfg, "deepseek_configured": cfg.deepseek_api_key_set, "runtime": status}
+
+    @app.put("/api/hermes/config")
+    async def api_hermes_config_update(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        body = await request.json()
+        return await _proxy_bridge("PUT", "/v1/hermes/config", use_admin=True, json_body=body)
+
+    @app.patch("/api/projects/{project_id}/hermes")
+    async def api_project_hermes_update(project_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        body = await request.json()
+        return await _proxy_bridge(
+            "PATCH", f"/v1/projects/{project_id}/hermes", use_admin=True, json_body=body
+        )
 
     @app.get("/api/projects")
     async def api_projects() -> JSONResponse:

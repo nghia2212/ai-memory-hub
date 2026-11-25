@@ -280,6 +280,80 @@ class MemoryBridgeService:
             "updated_at": now,
         }
 
+    def update_project_hermes(self, project_id: str, hermes_approved: bool) -> dict[str, Any]:
+        now = utc_now_iso()
+        with self.db.write_tx() as conn:
+            proj = self._ensure_project(conn, project_id)
+            conn.execute(
+                "UPDATE projects SET hermes_approved = ?, updated_at = ? WHERE id = ?",
+                (1 if hermes_approved else 0, now, project_id),
+            )
+            return {
+                "project_id": project_id,
+                "name": proj["name"],
+                "hermes_approved": bool(hermes_approved),
+                "updated_at": now,
+            }
+
+    def get_hermes_config(self) -> dict[str, Any]:
+        default_cfg = {
+            "enabled": False,
+            "provider": "deepseek",
+            "allow_paid_deepseek": False,
+            "updated_at": None,
+            "source": "default",
+        }
+        with self.db.read_conn() as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_settings'"
+            ).fetchone()
+            if not row:
+                return default_cfg
+            rec = conn.execute(
+                "SELECT value_json, updated_at FROM runtime_settings WHERE key = 'hermes_config'"
+            ).fetchone()
+            if not rec:
+                return default_cfg
+            data = json.loads(rec["value_json"])
+            return {
+                "enabled": bool(data.get("enabled", False)),
+                "provider": str(data.get("provider", "deepseek")),
+                "allow_paid_deepseek": bool(data.get("allow_paid_deepseek", False)),
+                "updated_at": rec["updated_at"],
+                "source": "admin_override",
+            }
+
+    def update_hermes_config(
+        self, *, enabled: bool, provider: str = "deepseek", allow_paid_deepseek: bool = False
+    ) -> dict[str, Any]:
+        now = utc_now_iso()
+        # Safety invariant: disabling Hermes always disables paid DeepSeek fallback as well.
+        effective_paid = bool(allow_paid_deepseek) if enabled else False
+        payload = {
+            "enabled": bool(enabled),
+            "provider": provider,
+            "allow_paid_deepseek": effective_paid,
+        }
+        with self.db.write_tx() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO runtime_settings (key, value_json, updated_at)
+                VALUES ('hermes_config', ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+                """,
+                (json.dumps(payload, ensure_ascii=False), now),
+            )
+        return {**payload, "updated_at": now, "source": "admin_override"}
+
     def list_worktrees(self, project_id: str) -> dict[str, Any]:
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)

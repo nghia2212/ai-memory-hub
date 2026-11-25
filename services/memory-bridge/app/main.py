@@ -18,11 +18,13 @@ from .schemas import (
     CodeSearchRequest,
     EventCreateRequest,
     HandoffCreateRequest,
+    HermesConfigUpdateRequest,
     IndexTriggerRequest,
     MemoryCreateRequest,
     MemorySearchRequest,
     MemoryVerifyRequest,
     ProjectCreateRequest,
+    ProjectHermesUpdateRequest,
     RestoreRequest,
     WorkerResultRequest,
     WorktreeCreateRequest,
@@ -119,6 +121,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/projects", status_code=201)
     async def create_project(req: ProjectCreateRequest, _: AuthPrincipal = Depends(require_admin)) -> dict[str, Any]:
         return service.create_project(req)
+
+    @app.patch("/v1/projects/{project_id}/hermes")
+    async def update_project_hermes(
+        project_id: UUID,
+        req: ProjectHermesUpdateRequest,
+        _: AuthPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        return service.update_project_hermes(str(project_id), req.hermes_approved)
+
+    @app.get("/v1/hermes/config")
+    async def get_hermes_config(_: AuthPrincipal = Depends(require_read)) -> dict[str, Any]:
+        return service.get_hermes_config()
+
+    @app.put("/v1/hermes/config")
+    async def update_hermes_config(
+        req: HermesConfigUpdateRequest,
+        _: AuthPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        return service.update_hermes_config(
+            enabled=req.enabled,
+            provider=req.provider,
+            allow_paid_deepseek=req.allow_paid_deepseek,
+        )
 
     @app.get("/v1/projects/{project_id}/worktrees")
     async def list_worktrees(project_id: UUID, _: AuthPrincipal = Depends(require_read)) -> dict[str, Any]:

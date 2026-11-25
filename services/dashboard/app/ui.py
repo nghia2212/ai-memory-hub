@@ -50,6 +50,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .badge.ok { color: var(--ok); border-color: var(--ok); }
     .badge.warn { color: var(--warn); border-color: var(--warn); }
     .badge.err { color: var(--err); border-color: var(--err); }
+    .badge.muted { color: var(--muted); border-color: var(--border); }
     nav {
       display: flex;
       gap: 8px;
@@ -284,8 +285,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 7. Cấu hình Hermes -->
     <section id="tab-hermes" class="panel">
+      <div class="card" style="margin-bottom:16px">
+        <h2>Điều khiển Hermes Worker (Quyền quản trị)</h2>
+        <p style="color:var(--muted)">Mặc định Hermes ở trạng thái <strong>Đã tắt</strong> để không phát sinh chi phí ngoài ý muốn. Việc bật Hermes <strong>không tự động kích hoạt DeepSeek API trả phí</strong>; cần có <code>DEEPSEEK_API_KEY</code> và xác nhận cấp phép riêng.</p>
+        <div id="hermes-runtime-card" style="margin-bottom:12px">Đang tải cấu hình Hermes...</div>
+        <div class="grid">
+          <div>
+            <label>Provider</label>
+            <select id="hermes-provider">
+              <option value="deepseek">deepseek (cần API key & cấp phép riêng)</option>
+              <option value="mock">mock (giả lập nội bộ, 0 chi phí)</option>
+              <option value="hermes_gateway">hermes_gateway (gateway nội bộ)</option>
+            </select>
+          </div>
+          <div style="display:flex;flex-direction:column;justify-content:flex-end">
+            <label><input id="hermes-allow-paid" type="checkbox" style="width:auto" /> Cấp phép dùng DeepSeek API trả phí (Tắt mặc định)</label>
+          </div>
+        </div>
+        <div class="row-actions" style="margin-top:10px">
+          <button class="primary" style="margin-top:0" onclick="toggleHermes(true)">Bật Hermes (Quản trị)</button>
+          <button class="secondary" onclick="toggleHermes(false)">Tắt Hermes (Quản trị)</button>
+          <button class="secondary" onclick="loadHermesPanel()">Làm mới</button>
+        </div>
+      </div>
       <div class="card">
-        <h2>Trạng thái cấu hình Hermes (Opt-in theo dự án)</h2>
+        <h2>Trạng thái Opt-in Hermes theo dự án</h2>
         <p style="color:var(--muted)">Mặc định từ chối gửi dữ liệu ra ngoài. Chỉ các dự án bật <code>hermes_approved</code> và sự kiện đã duyệt/che bí mật mới vào hàng đợi worker.</p>
         <div id="hermes-status"></div>
       </div>
@@ -476,15 +500,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function serviceStateBadge(s) {
+      const state = s?.state || (s?.ready ? "active" : (s?.status === "disabled" ? "disabled" : "unreachable"));
+      if (state === "active") return { cls: "ok", label: s?.label || "Đang hoạt động" };
+      if (state === "disabled") return { cls: "muted", label: s?.label || "Đã tắt" };
+      if (state === "unconfigured") return { cls: "warn", label: s?.label || "Chưa cấu hình" };
+      return { cls: "err", label: s?.label || "Lỗi kết nối" };
+    }
+
     async function loadOverview() {
       try {
         const status = await apiFetch("/api/status");
         const cards = document.getElementById("health-cards");
         const renderCard = (title, s) => {
-          const ok = s && s.ready;
-          const cls = ok ? "ok" : "err";
-          const txt = ok ? "Sẵn sàng" : (s?.status || "Không khả dụng");
-          return `<div class="card"><h3>${title}</h3><span class="badge ${cls}">${txt}</span></div>`;
+          const b = serviceStateBadge(s);
+          const detail = s?.detail ? `<p style="margin:8px 0 0;font-size:0.82rem;color:var(--muted)">${s.detail}</p>` : "";
+          return `<div class="card"><h3>${title}</h3><span class="badge ${b.cls}">${b.label}</span>${detail}</div>`;
         };
         cards.innerHTML =
           renderCard("Memory Bridge", status.bridge) +
@@ -493,6 +524,63 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById("overview-summary").innerHTML = `<pre>${JSON.stringify(status, null, 2)}</pre>`;
       } catch (e) {
         toast("Lỗi tải trạng thái: " + e.message);
+      }
+    }
+
+    async function loadHermesPanel() {
+      try {
+        const data = await apiFetch("/api/hermes/config");
+        const b = serviceStateBadge(data.runtime);
+        document.getElementById("hermes-provider").value = data.provider || "deepseek";
+        document.getElementById("hermes-allow-paid").checked = Boolean(data.allow_paid_deepseek);
+        const keyBadge = data.deepseek_configured
+          ? `<span class="badge ok">Đã cấu hình</span>`
+          : `<span class="badge warn">Chưa cấu hình</span>`;
+        const paidBadge = data.allow_paid_deepseek
+          ? `<span class="badge warn">Đã cấp phép</span>`
+          : `<span class="badge muted">Đã tắt (An toàn)</span>`;
+        document.getElementById("hermes-runtime-card").innerHTML = `
+          <div class="row-actions" style="gap:12px">
+            <span>Trạng thái: <span class="badge ${b.cls}">${b.label}</span></span>
+            <span>DEEPSEEK_API_KEY: ${keyBadge}</span>
+            <span>DeepSeek API trả phí: ${paidBadge}</span>
+          </div>
+          <p style="margin:8px 0 0;font-size:0.85rem;color:var(--muted)">${data.runtime?.detail || ""}</p>
+        `;
+      } catch (e) {
+        toast("Lỗi tải cấu hình Hermes: " + e.message);
+      }
+    }
+
+    async function toggleHermes(enabled) {
+      const provider = document.getElementById("hermes-provider").value;
+      const allowPaid = enabled ? document.getElementById("hermes-allow-paid").checked : false;
+      try {
+        await apiFetch("/api/hermes/config", {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: Boolean(enabled),
+            provider: provider,
+            allow_paid_deepseek: allowPaid
+          })
+        });
+        toast(enabled ? "Đã bật Hermes (không tự kích hoạt DeepSeek API trả phí)" : "Đã tắt Hermes Worker");
+        await Promise.all([loadHermesPanel(), loadOverview()]);
+      } catch (e) {
+        toast("Lỗi cập nhật Hermes (cần đăng nhập quản trị): " + e.message);
+      }
+    }
+
+    async function toggleProjectHermes(projectId, approved) {
+      try {
+        await apiFetch(`/api/projects/${encodeURIComponent(projectId)}/hermes`, {
+          method: "PATCH",
+          body: JSON.stringify({ hermes_approved: Boolean(approved) })
+        });
+        toast(approved ? "Đã bật Opt-in Hermes cho dự án" : "Đã tắt Opt-in Hermes cho dự án");
+        await loadProjects();
+      } catch (e) {
+        toast("Lỗi cập nhật dự án (cần đăng nhập quản trị): " + e.message);
       }
     }
 
@@ -508,13 +596,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           if (prev && projectsCache.some(p => p.project_id === prev)) sel.value = prev;
         }
         let html = "<table><tr><th>Tên</th><th>Định danh</th><th>Hermes</th><th>Worktrees</th></tr>";
-        let hermesHtml = "<table><tr><th>Dự án</th><th>Trạng thái Hermes</th></tr>";
+        let hermesHtml = "<table><tr><th>Dự án</th><th>Trạng thái Hermes</th><th>Hành động (Quản trị)</th></tr>";
         for (const p of projectsCache) {
           const wtData = await apiFetch(`/api/projects/${p.project_id}/worktrees`);
           worktreesByProject[p.project_id] = wtData.items || [];
           const wtText = (wtData.items || []).map(w => `${w.branch || "detached"} [${w.mount_status}]`).join("<br/>") || "Chưa có";
           html += `<tr><td>${p.name}</td><td><code>${p.canonical_identity}</code></td><td>${p.hermes_approved ? "Đã bật" : "Tắt"}</td><td>${wtText}</td></tr>`;
-          hermesHtml += `<tr><td>${p.name}</td><td><span class="badge ${p.hermes_approved ? "ok" : "warn"}">${p.hermes_approved ? "Đã phê duyệt (Opt-in)" : "Từ chối mặc định"}</span></td></tr>`;
+          const toggleBtn = p.hermes_approved
+            ? `<button class="secondary" onclick="toggleProjectHermes('${p.project_id}', false)">Tắt Opt-in</button>`
+            : `<button class="secondary" onclick="toggleProjectHermes('${p.project_id}', true)">Bật Opt-in</button>`;
+          hermesHtml += `<tr><td>${p.name}</td><td><span class="badge ${p.hermes_approved ? "ok" : "muted"}">${p.hermes_approved ? "Đã phê duyệt (Opt-in)" : "Đã tắt (Từ chối mặc định)"}</span></td><td>${toggleBtn}</td></tr>`;
         }
         html += "</table>";
         hermesHtml += "</table>";
@@ -861,6 +952,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     window.addEventListener("DOMContentLoaded", async () => {
       await checkSession();
       await loadOverview();
+      await loadHermesPanel();
       await loadProjects();
       await loadBrainPanel();
       await loadPlans();

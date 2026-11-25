@@ -76,6 +76,9 @@ services:
       BRIDGE_URL: http://memory-bridge:8082
       CODEBASE_URL: http://codebase:8081
       HERMES_URL: http://hermes:8083
+      HERMES_ENABLED: "${HERMES_ENABLED:-false}"
+      HERMES_PROVIDER: "${HERMES_PROVIDER:-deepseek}"
+      DEEPSEEK_API_KEY_SET: "${DEEPSEEK_API_KEY:+true}"
       BRIDGE_READ_TOKEN: "${BRIDGE_READ_TOKEN:-}"
       BRIDGE_ADMIN_TOKEN: "${BRIDGE_ADMIN_TOKEN:-}"
       DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD:-}"

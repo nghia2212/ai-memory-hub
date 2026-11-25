@@ -13,6 +13,13 @@ class DashboardSettings:
     bridge_url: str = field(default_factory=lambda: os.environ.get("BRIDGE_URL", "http://127.0.0.1:8082"))
     codebase_url: str = field(default_factory=lambda: os.environ.get("CODEBASE_URL", "http://127.0.0.1:8081"))
     hermes_url: str = field(default_factory=lambda: os.environ.get("HERMES_URL", "http://127.0.0.1:8083"))
+    hermes_enabled: bool = field(
+        default_factory=lambda: os.environ.get("HERMES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    hermes_provider: str = field(default_factory=lambda: os.environ.get("HERMES_PROVIDER", "deepseek").strip().lower() or "deepseek")
+    deepseek_api_key_set: bool = field(
+        default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY_SET", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
     bridge_read_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_READ_TOKEN", ""))
     bridge_admin_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_ADMIN_TOKEN", ""))
     dashboard_password: str = field(default_factory=lambda: os.environ.get("DASHBOARD_PASSWORD", ""))
