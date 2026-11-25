@@ -45,12 +45,12 @@
     for(const t of tasks){
       const title=el("input");title.value=t.title;title.maxLength=200;title.oninput=()=>t.title=title.value;
       const objective=el("textarea");objective.value=t.objective;objective.maxLength=4000;objective.oninput=()=>t.objective=objective.value;
-      const model=el("select");for(const m of models){const o=el("option",m.provider+" / "+m.model_id);o.value=JSON.stringify([m.provider,m.model_id]);model.append(o);}
+      const model=el("select");for(const m of models){const o=el("option",m.provider+" / "+m.model_id+" — "+({exhausted:"Hết quota",observed_available:"Có hạn mức (đã ghi nhận)",unknown:"Quota chưa rõ"}[m.quota?.state]||"Quota chưa rõ"));o.disabled=m.quota?.state==="exhausted";o.value=JSON.stringify([m.provider,m.model_id]);model.append(o);}
       const current=JSON.stringify([t.assigned_provider,t.assigned_model_id]);if(!Array.from(model.options).some(o=>o.value===current)){const o=el("option",t.assigned_provider+" / "+t.assigned_model_id+" (không có trong catalog)");o.value=current;model.append(o);}model.value=current;
       model.onchange=()=>{const [provider,id]=JSON.parse(model.value);t.assigned_agent=provider;t.assigned_provider=provider;t.assigned_model_id=id;t.assigned_effort=null;};
       panel.append(el("label","Tên task "+t.task_key),title,el("label","Mục tiêu"),objective,el("label","Model CLI"),model);
     }
-    panel.append(button("Lưu revision mới",async()=>{const forecast=await apiFetch("/api/v2/forecasts",{method:"POST",body:JSON.stringify({project_id:d.project_id,worktree_id:d.worktree_id,tasks,persist:true})});await apiFetch("/api/v2/plans/"+encodeURIComponent(d.id)+"/revisions",{method:"PUT",body:JSON.stringify({project_id:d.project_id,expected_revision_id:rev.id,tasks,forecast_id:forecast.forecast_id})});unlock();await showPlan(d.id);}),button("Hủy chỉnh sửa",async()=>{unlock();await showPlan(d.id);}));
+    panel.append(button("Lưu revision mới",async()=>{await apiFetch("/api/v2/plans/"+encodeURIComponent(d.id)+"/revisions",{method:"PUT",body:JSON.stringify({project_id:d.project_id,expected_revision_id:rev.id,tasks})});unlock();await showPlan(d.id);}),button("Hủy chỉnh sửa",async()=>{unlock();await showPlan(d.id);}));
     target.append(panel);
   }
   window.loadPlans=refreshPlans;
@@ -90,7 +90,24 @@
       target.append(el("h4",path+" · trang mã nguồn (không phải Git diff toàn bộ)"),panes);
     }
   }
-  async function loadUsage(){const pid=$("metrics-proj").value;if(!pid)return;try{const [m,u]=await Promise.all([apiFetch("/api/metrics"),apiFetch("/api/v2/usage?"+qs({project_id:pid}))]);if($("metrics-proj").value!==pid)return;const t=$("metrics-view");t.replaceChildren(el("h3","Hiệu năng truy vấn (toàn hệ thống)"));fields(t.appendChild(el("div")),[["Lượt truy vấn",m.query_count],["Latency trung bình (ms)",m.avg_latency_ms],["P50 (ms)",m.latency_percentiles_ms?.p50],["P95 (ms)",m.latency_percentiles_ms?.p95],["P99 (ms)",m.latency_percentiles_ms?.p99],["Số mẫu latency",m.latency_sample_count],["Ký tự trung bình",m.avg_result_chars],...Object.entries(m.counts||{})]);t.append(el("h3","Token theo dự án"));table(t.appendChild(el("div")),["Vai trò","Input","Output","Cache read","Cache write","Reasoning","Chi phí USD","Số phiên đo / ước tính / thiếu"],["planner","executor"].map(k=>[k,u[k]?.input_tokens,u[k]?.output_tokens,u[k]?.cache_read_tokens,u[k]?.cache_write_tokens,u[k]?.reasoning_tokens,u[k]?.cost_usd,[u[k]?.coverage?.measured,u[k]?.coverage?.estimated,u[k]?.coverage?.unavailable].map(fmt).join(" / ")]));t.append(el("p","Tổng token chỉ bao gồm các giá trị đã ghi nhận; không đại diện toàn bộ phiên nếu coverage thiếu."),el("h3","Quota do provider cung cấp"));if(!(u.quotas||[]).length)t.append(el("p","Chưa có snapshot quota được provider cung cấp."));table(t.appendChild(el("div")),["Provider","Loại","Tỷ lệ báo cáo","Nguồn","Quan sát lúc","Reset","Nhiễu"],(u.quotas||[]).map(q=>[q.provider,q.quota_kind,q.display_value,q.source,vnTime(q.observed_at),vnTime(q.reset_at),q.confounded?"Có":"Không"]));}catch(e){$("metrics-view").textContent=e.message;}}
+  async function quotaControls(target){
+    const cat=await apiFetch("/api/v2/catalog");
+    const panel=el("div",null,"card"),select=el("select");
+    const models=(cat.models||[]).filter(m=>m.auth_mode==="subscription_cli"&&m.status==="verified");
+    for(const m of models){const o=el("option",m.provider+" / "+m.model_id+" — "+(m.quota?.state||"unknown"));o.value=JSON.stringify([m.provider,m.model_id]);select.append(o);}
+    const reset=el("input");reset.type="datetime-local";
+    panel.append(el("h3","Quản lý quota thủ công"),el("p","Chọn đúng provider và model. Giờ reset theo giờ máy; để trống nếu chưa biết. Khôi phục chỉ khi đã xác nhận."),select,el("label","Reset dự kiến"),reset);
+    async function save(exhausted){
+      if(!select.value)return;
+      const [provider,model]=JSON.parse(select.value);
+      if(!confirm((exhausted?"Đánh dấu hết quota: ":"Xác nhận đã khôi phục: ")+provider+" / "+model+"?"))return;
+      await apiFetch("/api/v2/quotas",{method:"POST",body:JSON.stringify({provider,auth_mode:"subscription_cli",account_bucket:"model:"+model,quota_kind:"subscription_quota",unit:"availability_flag",numerator:exhausted?1:0,denominator:1,reset_at:exhausted&&reset.value?new Date(reset.value).toISOString():null,source:"manual_user_confirmation",confounded:false,observed_at:new Date().toISOString()})});
+      await loadUsage();
+    }
+    panel.append(button("Đánh dấu hết quota",()=>save(true)),button("Xác nhận quota đã phục hồi",()=>save(false)));
+    target.append(panel);
+  }
+  async function loadUsage(){const pid=$("metrics-proj").value;if(!pid)return;try{const [m,u]=await Promise.all([apiFetch("/api/metrics"),apiFetch("/api/v2/usage?"+qs({project_id:pid}))]);if($("metrics-proj").value!==pid)return;const t=$("metrics-view");t.replaceChildren(el("h3","Hiệu năng truy vấn (toàn hệ thống)"));fields(t.appendChild(el("div")),[["Lượt truy vấn",m.query_count],["Latency trung bình (ms)",m.avg_latency_ms],["P50 (ms)",m.latency_percentiles_ms?.p50],["P95 (ms)",m.latency_percentiles_ms?.p95],["P99 (ms)",m.latency_percentiles_ms?.p99],["Số mẫu latency",m.latency_sample_count],["Ký tự trung bình",m.avg_result_chars],...Object.entries(m.counts||{})]);t.append(el("h3","Token theo dự án"));table(t.appendChild(el("div")),["Vai trò","Input","Output","Cache read","Cache write","Reasoning","Chi phí USD","Số phiên đo / ước tính / thiếu"],["planner","executor"].map(k=>[k,u[k]?.input_tokens,u[k]?.output_tokens,u[k]?.cache_read_tokens,u[k]?.cache_write_tokens,u[k]?.reasoning_tokens,u[k]?.cost_usd,[u[k]?.coverage?.measured,u[k]?.coverage?.estimated,u[k]?.coverage?.unavailable].map(fmt).join(" / ")]));t.append(el("p","Tổng token chỉ bao gồm các giá trị đã ghi nhận; không đại diện toàn bộ phiên nếu coverage thiếu."),el("h3","Quota do provider cung cấp"));if(!(u.quotas||[]).length)t.append(el("p","Chưa có snapshot quota được provider cung cấp."));table(t.appendChild(el("div")),["Provider","Loại","Tỷ lệ báo cáo","Nguồn","Quan sát lúc","Reset","Nhiễu"],(u.quotas||[]).map(q=>[q.provider,q.quota_kind,q.display_value,q.source,vnTime(q.observed_at),vnTime(q.reset_at),q.confounded?"Có":"Không"]));await quotaControls(t);}catch(e){$("metrics-view").textContent=e.message;}}
   window.loadMetrics=loadUsage;
   window.openTraceSource=(path,line=1)=>openSource(path,line);
   function resetExplorer(){++treeEpoch;++sourceEpoch;sourcePath="";sourceLine=1;syncCompare();$("tree-files").replaceChildren();$("source-text").textContent="";$("symbol-list").replaceChildren();$("call-graph").replaceChildren();$("index-meta").replaceChildren();$("source-actions").replaceChildren();}
