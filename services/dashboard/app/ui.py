@@ -134,6 +134,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script defer src="/workbench.js"></script>
   <script defer src="/execution-map.js"></script>
   <script defer src="/v3-ui.js"></script>
+  <script defer src="/v31-ui.js"></script>
 </head>
 <body>
   <header>
@@ -154,8 +155,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button onclick="showTab('plans', this)" >Giao công việc</button>
     <button onclick="showTab('agents', this)" >Agent Control Center</button>
     <button id="trace-nav" onclick="showTab('traces', this)">Bản đồ thực thi</button>
+    <button id="biz-nav" onclick="showTab('business', this)">Quản lý nghiệp vụ</button>
     <button id="conv-nav" onclick="showTab('conversations', this)">Lịch sử hội thoại AI</button>
-    <button id="mcp-nav" onclick="showTab('mcp', this)">Dynamic MCP</button>
+    <button id="mcp-nav" onclick="showTab('mcp', this)">Kho MCP &amp; Công cụ</button>
     <button onclick="showTab('code', this)" >Codebase Explorer</button>
     <button onclick="showTab('projects', this)" >Dự án & Worktree</button>
     <button onclick="showTab('memory', this)" >Bộ nhớ</button>
@@ -571,22 +573,125 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
     </section>
+    <section id="tab-business" class="panel">
+      <div class="trace-page-head">
+        <h2>Quản lý nghiệp vụ (Business Workspaces — V3.1)</h2>
+        <div class="row-actions">
+          <button id="biz-import-btn" type="button" class="secondary">Import JSON</button>
+          <button id="biz-refresh" type="button">Làm mới</button>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Thêm nghiệp vụ mới</h3>
+          <label>Tên nghiệp vụ</label>
+          <input id="biz-new-name" placeholder="Ví dụ: Mobile QA / Data Engineering" />
+          <label>Biểu tượng (Icon)</label>
+          <input id="biz-new-icon" value="briefcase" placeholder="gamepad / architecture / code / briefcase" />
+          <label>Mô tả</label>
+          <textarea id="biz-new-desc" rows="2" placeholder="Mô tả phạm vi và nhiệm vụ của nghiệp vụ..."></textarea>
+          <button id="biz-create-btn" type="button" class="primary">Tạo nghiệp vụ trống</button>
+        </div>
+        <div class="card">
+          <h3>Tạo từ Template chuẩn hoặc Tự tạo</h3>
+          <label>Chọn Template</label>
+          <select id="biz-template-sel"></select>
+          <button id="biz-from-tpl-btn" type="button" class="primary">Tạo từ Template</button>
+          <hr style="border-color:var(--border);margin:12px 0" />
+          <label>Tìm kiếm &amp; Lọc</label>
+          <input id="biz-search" placeholder="Tìm tên, mô tả hoặc slug + Enter" />
+          <div class="row-actions" style="margin-top:8px">
+            <label style="display:inline-flex;align-items:center;gap:6px"><input id="biz-show-archived" type="checkbox" style="width:auto" /> Hiện đã lưu trữ</label>
+            <label style="display:inline-flex;align-items:center;gap:6px"><input id="biz-enabled-only" type="checkbox" style="width:auto" /> Chỉ đang bật</label>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>Danh sách nghiệp vụ</h3>
+        <div id="biz-list">Đăng nhập để tải danh sách nghiệp vụ.</div>
+      </div>
+      <div id="biz-detail-card" class="card" style="display:none">
+        <h3 id="biz-detail-title">Chi tiết nghiệp vụ</h3>
+        <div id="biz-detail-tabs" class="row-actions" style="margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
+          <button type="button" class="secondary active" data-biztab="overview">1. Tổng quan</button>
+          <button type="button" class="secondary" data-biztab="projects">2. Dự án</button>
+          <button type="button" class="secondary" data-biztab="mcps">3. MCP &amp; Công cụ</button>
+          <button type="button" class="secondary" data-biztab="model">4. Model &amp; Quota</button>
+          <button type="button" class="secondary" data-biztab="instructions">5. Agent Instructions</button>
+          <button type="button" class="secondary" data-biztab="workflow">6. Workflow</button>
+          <button type="button" class="secondary" data-biztab="memory">7. Memory</button>
+          <button type="button" class="secondary" data-biztab="resources">8. Resource Limits</button>
+          <button type="button" class="secondary" data-biztab="versions">9. Lịch sử cấu hình</button>
+        </div>
+        <div id="biz-detail-body"></div>
+      </div>
+    </section>
     <section id="tab-mcp" class="panel">
       <div class="trace-page-head">
-        <h2>Dynamic MCP Registry &amp; Capability Routing (V3.0)</h2>
-        <button id="mcp-refresh" type="button">Làm mới Registry</button>
-      </div>
-      <div class="card">
-        <h3>Kiểm thử Capability Router (0 LLM)</h3>
-        <div class="trace-filters">
-          <label>Dự án<select id="mcp-proj"></select></label>
-          <label>Capabilities (phân tách bằng dấu phẩy)<input id="mcp-route-caps" value="code_search, memory_read"></label>
-          <label><input id="mcp-route-write" type="checkbox"> Cho phép write_scoped</label>
+        <h2>Kho MCP &amp; Công cụ — Dynamic MCP Gateway (V3.1)</h2>
+        <div class="row-actions">
+          <label style="display:inline-flex;align-items:center;gap:6px"><input id="v31-mcp-show-archived" type="checkbox" style="width:auto" /> Hiện đã vô hiệu hóa</label>
+          <button id="v31-mcp-refresh" type="button" class="primary">Làm mới Kho MCP</button>
+          <button id="mcp-refresh" type="button" class="secondary">Làm mới Audit V3</button>
         </div>
-        <button id="mcp-route-btn" type="button" class="secondary">Định tuyến MCP</button>
-        <div id="mcp-route-result" style="margin-top:8px"></div>
       </div>
-      <div id="mcp-servers-list"></div>
+      <div id="v31-mcp-monitoring" class="grid"></div>
+      <div class="grid">
+        <div class="card">
+          <h3>Đăng ký MCP / Adapter mới (mặc định chờ phê duyệt)</h3>
+          <label>Tên MCP Server</label>
+          <input id="v31-mcp-name" placeholder="Ví dụ: playwright-qa / glb-inspector" />
+          <label>Mô tả</label>
+          <input id="v31-mcp-desc" placeholder="Mô tả chức năng của MCP/Adapter" />
+          <label>Transport</label>
+          <select id="v31-mcp-transport">
+            <option value="streamable_http">Streamable HTTP MCP</option>
+            <option value="stdio">STDIO MCP</option>
+            <option value="native_cli">Native CLI Adapter</option>
+            <option value="rest_api">REST API Adapter</option>
+            <option value="local_tool">Local Deterministic Tool</option>
+          </select>
+          <label>Endpoint (HTTP/REST)</label>
+          <input id="v31-mcp-endpoint" placeholder="http://127.0.0.1:8090/mcp" />
+          <label>Executable (STDIO / CLI)</label>
+          <input id="v31-mcp-exec" placeholder="python / node / npx" />
+          <label>Arguments (cách nhau bằng khoảng trắng)</label>
+          <input id="v31-mcp-args" placeholder="-m my_mcp_server" />
+          <button id="v31-mcp-add-btn" type="button" class="primary">Đăng ký vào Kho MCP</button>
+        </div>
+        <div class="card">
+          <h3>Định tuyến MCP theo Nghiệp vụ (Business Capability Router — 0 LLM)</h3>
+          <label>Dự án</label>
+          <select id="mcp-proj"></select>
+          <label>Nghiệp vụ áp dụng</label>
+          <select id="v31-route-biz"></select>
+          <label>Chế độ định tuyến</label>
+          <select id="v31-route-mode">
+            <option value="automatic">Tự động (Automatic — chọn bộ tối thiểu)</option>
+            <option value="manual">Thủ công (Manual)</option>
+          </select>
+          <label>Capabilities cần thiết (phân tách dấu phẩy)</label>
+          <input id="v31-route-caps" value="memory_read, code_search" />
+          <label style="display:inline-flex;align-items:center;gap:6px"><input id="v31-route-write" type="checkbox" style="width:auto" /> Cho phép write_scoped</label>
+          <div class="row-actions" style="margin-top:8px">
+            <button id="v31-route-btn" type="button" class="primary">Định tuyến &amp; Lưu Snapshot</button>
+          </div>
+          <div id="v31-route-result" style="margin-top:8px"></div>
+          <div style="display:none"><input id="mcp-route-caps" value="code_search"><input id="mcp-route-write" type="checkbox"><button id="mcp-route-btn" type="button"></button><div id="mcp-route-result"></div></div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>Danh sách MCP &amp; Công cụ đã đăng ký</h3>
+        <div id="v31-mcp-servers">Đang tải...</div>
+        <div id="mcp-servers-list" style="display:none"></div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="trace-page-head">
+          <h3>Lịch sử gọi công cụ (MCP Invocation History)</h3>
+          <select id="v31-inv-biz" style="width:240px"></select>
+        </div>
+        <div id="v31-mcp-invocations"></div>
+      </div>
       <div class="card">
         <h3>Nhật ký Audit Dynamic MCP</h3>
         <div id="mcp-audit-list"></div>

@@ -14,6 +14,7 @@ from .schemas import (
 )
 from .security import current_mcp_principal, require_scope
 from .service import MemoryBridgeService
+from .v3_service import V3BridgeService
 
 
 def _require_mcp_scope(scope: str) -> None:
@@ -123,5 +124,23 @@ def create_mcp_server(service: MemoryBridgeService) -> FastMCP:
             max_chars=max_chars,
         )
         return service.search_code(req)
+
+    @mcp.tool()
+    def search_conversations(
+        project_id: str,
+        worktree_id: str,
+        query: str,
+        limit: int = 10,
+        max_chars: int = 4000,
+    ) -> dict[str, Any]:
+        """Search synced AI conversation history via FTS5 within strict project/worktree scope."""
+        v3 = V3BridgeService(service.db)
+        return v3.search_conversations(
+            project_id=str(UUID(project_id)),
+            worktree_id=str(UUID(worktree_id)),
+            query=query,
+            limit=limit,
+            max_chars=max_chars,
+        )
 
     return mcp

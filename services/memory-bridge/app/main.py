@@ -37,6 +37,9 @@ from .v2_routes import create_v2_router
 from .trace_routes import create_trace_router
 from .v3_routes import create_v3_router
 from .v3_service import V3BridgeService
+from .v31_business_service import V31BusinessService
+from .v31_mcp_gateway import V31McpGatewayService
+from .v31_routes import create_v31_router
 from .trace_operations import trace_parent, trace_transport
 from .v2_service import V2BridgeService
 
@@ -342,6 +345,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     v3_service = V3BridgeService(db)
     app.state.v3_service = v3_service
     app.include_router(create_v3_router(v3_service, cfg))
+    v31_biz = V31BusinessService(db)
+    v31_gw = V31McpGatewayService(db, v3_service, settings=cfg)
+    app.state.v31_business_service = v31_biz
+    app.state.v31_mcp_gateway = v31_gw
+    app.include_router(create_v31_router(v31_biz, v31_gw, cfg))
 
     # Mount FastMCP Streamable HTTP app at /mcp
     app.mount("/mcp", mcp_app)

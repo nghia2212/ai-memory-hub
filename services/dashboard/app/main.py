@@ -234,6 +234,10 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     def v3_ui_js():
         return Response(Path(__file__).with_name("v3-ui.js").read_bytes(), media_type="application/javascript")
 
+    @app.get("/v31-ui.js")
+    def v31_ui_js():
+        return Response(Path(__file__).with_name("v31-ui.js").read_bytes(), media_type="application/javascript")
+
     @app.get("/api/v2/traces")
     async def api_traces(request: Request):
         _require_session(request)
@@ -963,6 +967,171 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v3_conversation_delete(conv_id: UUID, project_id: UUID, request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("DELETE", f"/v3/conversations/{conv_id}", use_admin=True, params={"project_id": str(project_id)})
+
+    # --- V3.1 Business Workspace & Dynamic MCP Gateway Proxy Routes (all auth/CSRF enforced) ---
+    @app.get("/api/v31/businesses")
+    async def api_v31_list_businesses(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"search", "include_archived", "enabled_only"}
+        return await _proxy_bridge("GET", "/v31/businesses", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v31/businesses")
+    async def api_v31_create_business(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v31/businesses", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v31/businesses/templates")
+    async def api_v31_list_templates(request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", "/v31/businesses/templates")
+
+    @app.post("/api/v31/businesses/from-template")
+    async def api_v31_from_template(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v31/businesses/from-template", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v31/businesses/import")
+    async def api_v31_import_business(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v31/businesses/import", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v31/businesses/{business_id}")
+    async def api_v31_get_business(business_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v31/businesses/{business_id}")
+
+    @app.put("/api/v31/businesses/{business_id}")
+    async def api_v31_update_business(business_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PUT", f"/v31/businesses/{business_id}", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v31/businesses/{business_id}/archive")
+    async def api_v31_archive_business(business_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/businesses/{business_id}/archive", use_admin=True)
+
+    @app.post("/api/v31/businesses/{business_id}/restore")
+    async def api_v31_restore_business(business_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/businesses/{business_id}/restore", use_admin=True)
+
+    @app.post("/api/v31/businesses/{business_id}/duplicate")
+    async def api_v31_duplicate_business(business_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/businesses/{business_id}/duplicate", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v31/businesses/{business_id}/export")
+    async def api_v31_export_business(business_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v31/businesses/{business_id}/export")
+
+    @app.get("/api/v31/businesses/{business_id}/versions")
+    async def api_v31_business_versions(business_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v31/businesses/{business_id}/versions")
+
+    @app.post("/api/v31/businesses/{business_id}/versions/{revision}/restore")
+    async def api_v31_restore_version(business_id: str, revision: int, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/businesses/{business_id}/versions/{revision}/restore", use_admin=True)
+
+    @app.post("/api/v31/businesses/{business_id}/projects")
+    async def api_v31_attach_project(business_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/businesses/{business_id}/projects", use_admin=True, json_body=await request.json())
+
+    @app.delete("/api/v31/businesses/{business_id}/projects/{project_id}")
+    async def api_v31_detach_project(business_id: str, project_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("DELETE", f"/v31/businesses/{business_id}/projects/{project_id}", use_admin=True)
+
+    @app.post("/api/v31/businesses/{business_id}/mcps")
+    async def api_v31_bind_mcp(business_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/businesses/{business_id}/mcps", use_admin=True, json_body=await request.json())
+
+    @app.delete("/api/v31/businesses/{business_id}/mcps/{server_id}")
+    async def api_v31_unbind_mcp(business_id: str, server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("DELETE", f"/v31/businesses/{business_id}/mcps/{server_id}", use_admin=True)
+
+    @app.post("/api/v31/businesses/{business_id}/tools/policy")
+    async def api_v31_tool_policy(business_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/businesses/{business_id}/tools/policy", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v31/mcp/servers")
+    async def api_v31_mcp_servers(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"include_archived"}
+        return await _proxy_bridge("GET", "/v31/mcp/servers", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v31/mcp/servers")
+    async def api_v31_mcp_create(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v31/mcp/servers", use_admin=True, json_body=await request.json())
+
+    @app.put("/api/v31/mcp/servers/{server_id}")
+    async def api_v31_mcp_update(server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PUT", f"/v31/mcp/servers/{server_id}", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v31/mcp/servers/{server_id}/archive")
+    async def api_v31_mcp_archive(server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/mcp/servers/{server_id}/archive", use_admin=True)
+
+    @app.post("/api/v31/mcp/servers/{server_id}/restore")
+    async def api_v31_mcp_restore(server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/mcp/servers/{server_id}/restore", use_admin=True)
+
+    @app.post("/api/v31/mcp/servers/{server_id}/health")
+    async def api_v31_mcp_health(server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/mcp/servers/{server_id}/health", planner=True, timeout=20.0)
+
+    @app.post("/api/v31/mcp/servers/{server_id}/discover")
+    async def api_v31_mcp_discover(server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/mcp/servers/{server_id}/discover", use_admin=True, timeout=25.0)
+
+    @app.post("/api/v31/mcp/servers/{server_id}/stop")
+    async def api_v31_mcp_stop(server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v31/mcp/servers/{server_id}/stop", use_admin=True)
+
+    @app.post("/api/v31/mcp/invoke")
+    async def api_v31_mcp_invoke(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v31/mcp/invoke", planner=True, json_body=await request.json(), timeout=45.0)
+
+    @app.post("/api/v31/mcp/route")
+    async def api_v31_mcp_route(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v31/mcp/route", planner=True, json_body=await request.json())
+
+    @app.get("/api/v31/mcp/invocations")
+    async def api_v31_mcp_invocations(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"business_id", "project_id", "session_id", "actor", "limit"}
+        return await _proxy_bridge("GET", "/v31/mcp/invocations", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.get("/api/v31/mcp/monitoring")
+    async def api_v31_mcp_monitoring(request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", "/v31/mcp/monitoring")
+
+    @app.get("/api/v31/assets")
+    async def api_v31_list_assets(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "format"}
+        return await _proxy_bridge("GET", "/v31/assets", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v31/assets")
+    async def api_v31_register_asset(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v31/assets", use_admin=True, json_body=await request.json())
 
     return app
 
