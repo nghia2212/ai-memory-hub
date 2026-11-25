@@ -115,6 +115,8 @@ def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25, mana
     if not exe:
         return 127, "", f"CLI not found on PATH: {args[0]}"
     cmd = [exe, *args[1:]]
+    if os.name == "nt" and len(subprocess.list2cmdline(cmd).encode("utf-16-le")) // 2 > (7000 if exe.lower().endswith((".cmd", ".bat")) else 30000):
+        return 1, "", "Prompt exceeds safe Windows CLI argument size; split the task or use a verified stdin adapter."
     try:
         proc = subprocess.run(
             cmd,
