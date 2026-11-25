@@ -250,6 +250,10 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     def v321_chat_ui_js():
         return Response(Path(__file__).with_name("v321-chat-ui.js").read_bytes(), media_type="application/javascript")
 
+    @app.get("/v321-recovery-ui.js")
+    def v321_recovery_ui_js():
+        return Response(Path(__file__).with_name("v321-recovery-ui.js").read_bytes(), media_type="application/javascript")
+
     @app.get("/api/v2/traces/scope-options")
     async def api_traces_scope_options(request: Request):
         _require_session(request)
@@ -1440,6 +1444,48 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v321_set_chat_defaults(project_id: str, request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("PUT", f"/v321/projects/{project_id}/chat-defaults", use_admin=True, json_body=await request.json())
+
+    # --- V3.2.1 P16B Persistent Task & Auto Recovery Proxy Routes (all auth/CSRF enforced) ---
+    @app.get("/api/v321/projects/{project_id}/recovery-policy")
+    async def api_v321_get_recovery_policy(project_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v321/projects/{project_id}/recovery-policy")
+
+    @app.put("/api/v321/projects/{project_id}/recovery-policy")
+    async def api_v321_set_recovery_policy(project_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PUT", f"/v321/projects/{project_id}/recovery-policy", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v321/recovery/queue")
+    async def api_v321_recovery_queue(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "include_resolved"}
+        return await _proxy_bridge("GET", "/v321/recovery/queue", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v321/recovery/scan")
+    async def api_v321_recovery_scan(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/recovery/scan", use_admin=True, json_body=await request.json(), timeout=20.0)
+
+    @app.get("/api/v321/recovery/checkpoints")
+    async def api_v321_recovery_checkpoints_list(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"entity_kind", "entity_id", "project_id"}
+        return await _proxy_bridge("GET", "/v321/recovery/checkpoints", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v321/recovery/checkpoints")
+    async def api_v321_recovery_checkpoints_create(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/recovery/checkpoints", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v321/recovery/{recovery_id}/{action}")
+    async def api_v321_recovery_action(recovery_id: str, action: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        if action not in ("resume", "reconnect", "pause", "cancel", "change-agent", "review"):
+            return JSONResponse(status_code=404, content={"error": {"code": "invalid_action", "message": "Unsupported recovery action"}})
+        allowed_q = {"deliver_cached_result"}
+        params = {k: v for k, v in request.query_params.items() if k in allowed_q}
+        return await _proxy_bridge("POST", f"/v321/recovery/{recovery_id}/{action}", use_admin=True, params=params or None, json_body=await request.json())
 
     return app
 

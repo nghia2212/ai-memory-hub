@@ -395,7 +395,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="secondary" id="agent-refresh">Cập nhật phiên</button><p id="agent-counts"></p><div id="agent-rows"></div><div id="agent-detail"></div></div>
     </section>
     <section id="tab-plans" class="panel">
-      <h2>Giao công việc</h2><div class="work-layout"><aside class="card"><h3>Lịch sử</h3>
+      <h2>Giao công việc</h2>
+      <div class="card" id="recovery-panel" style="margin-bottom:14px;border-left:3px solid var(--warn)">
+        <div class="row-actions" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div>
+            <h3 style="margin:0">Phục hồi nhiệm vụ sau Stop/Start (P16B Persistent Task &amp; Recovery)</h3>
+            <small class="trace-muted">Tự động phát hiện nhiệm vụ bị gián đoạn khi Hub/Docker/Host Runner khởi động lại. Không tạo trùng Plan/Task, không tự gọi lại API chưa rõ kết quả.</small>
+          </div>
+          <div class="row-actions" style="flex-wrap:wrap;gap:6px">
+            <select id="rec-mode-sel" style="width:215px" title="Chế độ phục hồi theo dự án">
+              <option value="hybrid">Hybrid Recovery (Mặc định)</option>
+              <option value="manual">Manual Recovery (Thủ công)</option>
+              <option value="automatic">Automatic Recovery (Tự động an toàn)</option>
+            </select>
+            <button id="rec-save-policy-btn" type="button" class="secondary" style="margin-top:0">Lưu chế độ</button>
+            <button id="rec-scan-btn" type="button" class="primary" style="margin-top:0">Quét phục hồi</button>
+          </div>
+        </div>
+        <div id="recovery-queue-summary" class="trace-muted" style="margin:8px 0">Đang kiểm tra hàng đợi phục hồi...</div>
+        <div id="recovery-queue-table"></div>
+        <div id="recovery-review-detail" style="margin-top:10px"></div>
+      </div>
+      <div class="work-layout"><aside class="card"><h3>Lịch sử</h3>
       <input id="history-filter" type="search" placeholder="Tìm nhiệm vụ"><div id="plans-list"></div></aside>
       <article class="card"><h3>Kế hoạch & Duyệt DAG</h3><div id="task-detail">Chọn nhiệm vụ trong lịch sử.</div>
       <pre id="plan-dispatch-output" style="display:none"></pre></article>
@@ -1684,6 +1705,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     });
   </script>
+  <script src="/v321-recovery-ui.js"></script>
 </body>
 </html>
 """

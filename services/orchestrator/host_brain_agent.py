@@ -755,6 +755,33 @@ def run_subscription_chat(
     }
 
 
+def check_runner_process_status(pid: int | None, runner_id: str | None = None) -> dict[str, Any]:
+    """Read-only check whether a recorded runner PID is still alive (never kills any process)."""
+    if not pid or pid <= 0:
+        return {"status": "unknown", "reason": "Missing or invalid PID"}
+    if os.name == "nt":
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, shell=False,
+            )
+            out = (proc.stdout or "").strip()
+            if out and f'"{pid}"' in out:
+                return {"status": "alive", "reason": f"Process PID {pid} is still running on host.", "matched_process": out.splitlines()[0][:200]}
+            return {"status": "stopped", "reason": f"Process PID {pid} is no longer running on host."}
+        except Exception as exc:
+            return {"status": "unknown", "reason": f"Failed to inspect PID {pid}: {exc}"}
+    try:
+        os.kill(pid, 0)
+        return {"status": "alive", "reason": f"Process PID {pid} responded to signal 0."}
+    except ProcessLookupError:
+        return {"status": "stopped", "reason": f"Process PID {pid} not found."}
+    except PermissionError:
+        return {"status": "alive", "reason": f"Process PID {pid} exists (permission restricted)."}
+    except Exception as exc:
+        return {"status": "unknown", "reason": str(exc)}
+
+
 def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
     expected_token = env.get("BRIDGE_RUNNER_TOKEN", "")
 
@@ -848,6 +875,13 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
                     timeout_sec=int(body.get("timeout_sec") or 110),
                 )
                 self._send(200 if res["ok"] else 422, res)
+                return
+
+            if self.path == "/host/runner-status":
+                raw_pid = body.get("pid")
+                pid_int = int(raw_pid) if isinstance(raw_pid, int) and not isinstance(raw_pid, bool) else None
+                res = check_runner_process_status(pid_int, runner_id=body.get("runner_id"))
+                self._send(200, res)
                 return
 
             if self.path in ("/host/mcp/health", "/host/mcp/discover", "/host/mcp/invoke", "/host/mcp/stop"):

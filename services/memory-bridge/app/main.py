@@ -50,6 +50,8 @@ from .v321_agent_engine import V321AgentExecutionEngine
 from .v321_chat_service import V321ChatService
 from .v321_subscription_service import V321SubscriptionService
 from .v321_api_agent_routes import create_v321_api_agent_router
+from .v321_recovery_service import V321RecoveryService
+from .v321_recovery_routes import create_v321_recovery_router
 from .trace_operations import trace_parent, trace_transport
 from .v2_service import V2BridgeService
 
@@ -64,6 +66,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def bridge_lifespan(_app: FastAPI):
         db.initialize()
+        try:
+            rec_svc = getattr(_app.state, "v321_recovery_service", None)
+            if rec_svc is not None:
+                await asyncio.to_thread(rec_svc.reconcile_startup, check_host_runner=False, apply_auto_policy=True)
+        except Exception:
+            logging.getLogger(__name__).exception("P16B startup recovery scan failed")
 
         async def sweep_leases():
             while True:
@@ -381,6 +389,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.v321_agent_engine = agent_eng
     app.state.v321_chat_service = chat_svc
     app.include_router(create_v321_api_agent_router(prov_svc, agent_eng, cfg, chat_svc=chat_svc, sub_svc=sub_svc))
+    rec_svc = V321RecoveryService(db, v2_service, prov_svc, sub_svc)
+    app.state.v321_recovery_service = rec_svc
+    app.include_router(create_v321_recovery_router(rec_svc, cfg))
 
     # Mount FastMCP Streamable HTTP app at /mcp
     app.mount("/mcp", mcp_app)

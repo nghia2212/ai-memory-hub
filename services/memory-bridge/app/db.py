@@ -23,8 +23,9 @@ from .v31_schema import BUSINESS_SQL, V31_EXTENSIONS_SQL
 from .v32_skill_schema import V32_SKILL_SQL
 from .v321_schema import V321_BINDINGS_OVERRIDES_SQL, V321_MCP321_SQL
 from .v321_api_agent_schema import V321_API_AGENT_SQL, V321_CHAT_WORKSPACE_SQL, V321_SUBSCRIPTION_AGENT_SQL
+from .v321_recovery_schema import V321_P16B_RECOVERY_SQL
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 MIGRATIONS: list[tuple[int, str, str]] = [
     (
@@ -541,6 +542,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (12, "mcp321_p14_p20_api_agent_and_hybrid", V321_API_AGENT_SQL),
     (13, "mcp321_p19a_chat_workspace", V321_CHAT_WORKSPACE_SQL),
     (14, "mcp321_p19a_subscription_agents_and_controls", V321_SUBSCRIPTION_AGENT_SQL),
+    (15, "mcp321_p16b_persistent_task_and_recovery", V321_P16B_RECOVERY_SQL),
 ]
 
 

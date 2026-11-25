@@ -134,7 +134,8 @@ try {
             'tests/v321/test_v321_business_bindings_and_telemetry.py',
             'tests/v321/test_v321_p14_p20_api_agent.py',
             'tests/v321/test_v321_p16a_p19a_result_delivery_and_chat.py',
-            'tests/v321/test_v321_p19a_subscription_agents.py'
+            'tests/v321/test_v321_p19a_subscription_agents.py',
+            'tests/v321/test_v321_p16b_persistent_recovery.py'
         )
         $suitesStr = $suites -join ' '
         $cmd = "apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null && python -m venv /tmp/mcp321test && /tmp/mcp321test/bin/pip install -q -r /repo/services/memory-bridge/requirements.txt -r /repo/services/dashboard/requirements.txt pytest && cd /repo && PYTHONPATH=/repo /tmp/mcp321test/bin/python -m pytest -p no:cacheprovider -q --maxfail=1 $suitesStr"
