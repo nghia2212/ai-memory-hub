@@ -5,7 +5,7 @@
 .trace-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:12px}
 .trace-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(240px,1fr);gap:12px}
 .trace-canvas{overflow:auto;min-height:240px}
-.trace-node{display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:220px;max-width:100%;border-left:5px solid #64748b!important;text-align:left;background:transparent!important;color:inherit!important;border-radius:8px;padding:10px!important;overflow-wrap:anywhere;white-space:normal}
+.trace-node{display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:220px;max-width:100%;border-left:5px solid var(--trace-color,#64748b)!important;text-align:left;background:transparent!important;color:inherit!important;border-radius:8px;padding:10px!important;overflow-wrap:anywhere;white-space:normal}
 .trace-node small{font-size:12px;opacity:.85}
 .trace-tree{margin:8px 0}.trace-children{border-left:1px solid #64748b;padding-left:22px;margin-left:16px}
 .trace-children>.trace-tree:before{content:"";display:block;width:20px;border-top:1px solid #64748b;position:relative;left:-22px;top:27px}
@@ -13,3 +13,13 @@
 .trace-lane{border:1px solid #64748b55;border-radius:8px;padding:8px;min-height:180px}.trace-lane .trace-node{margin:8px 0}
 .trace-muted{opacity:.7}#trace-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:520px;overflow:auto}
 @media(max-width:900px){.trace-layout{grid-template-columns:1fr}}
+
+.trace-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px}
+.trace-metrics .card{margin:0;padding:10px;display:flex;flex-direction:column;gap:4px}
+.trace-metric-note{grid-column:1/-1;font-size:12px}
+.trace-time-row{display:grid;grid-template-columns:220px minmax(180px,1fr) 140px;gap:8px;align-items:center;min-width:550px;margin:8px 0}
+.trace-time-track{position:relative;height:24px;background:#64748b20;border-radius:4px;overflow:hidden}
+.trace-time-bar{position:absolute;top:4px;height:16px;border-radius:3px}
+.trace-fields{display:grid;grid-template-columns:minmax(80px,1fr) minmax(0,2fr);gap:6px;font-size:12px}
+.trace-fields dt{opacity:.8}.trace-fields dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.trace-links{display:flex;flex-wrap:wrap;gap:6px}.trace-layout>*{min-width:0}
