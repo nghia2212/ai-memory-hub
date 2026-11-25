@@ -640,6 +640,121 @@ def execute_approved_plan(
     }
 
 
+def _extract_cli_session_and_model(stdout: str) -> tuple[str | None, str | None]:
+    """Best-effort extract provider-reported model & conversation/session ID from CLI JSON output."""
+    text = (stdout or "").strip()
+    if not text:
+        return None, None
+    sid = None
+    rep_model = None
+    candidates: list[Any] = []
+    try:
+        candidates.append(json.loads(text))
+    except Exception:
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    candidates.append(json.loads(line))
+                except Exception:
+                    continue
+    for obj in candidates:
+        if not isinstance(obj, dict):
+            continue
+        if not sid:
+            for k in ("conversation_id", "conversationId", "session_id", "sessionId"):
+                if isinstance(obj.get(k), str) and obj[k].strip():
+                    sid = obj[k].strip()[:120]
+                    break
+        if not rep_model:
+            for k in ("model", "model_id", "modelId"):
+                if isinstance(obj.get(k), str) and obj[k].strip():
+                    rep_model = obj[k].strip()[:120]
+                    break
+    return sid, rep_model
+
+
+def run_subscription_chat(
+    env: dict[str, str],
+    *,
+    cli_family: str,
+    model_id: str,
+    prompt: str,
+    mode: str = "chat",
+    worktree_path: str | None = None,
+    external_session_id: str | None = None,
+    thinking_level: str | None = None,
+    timeout_sec: int = 110,
+) -> dict[str, Any]:
+    """P19A.1: Direct non-interactive subscription CLI execution via officially supported flags (read-only)."""
+    cli = (cli_family or "").strip().lower()
+    mid = (model_id or "").strip()
+    if cli not in ("agy", "claude", "codex"):
+        return {
+            "ok": False,
+            "error_code": "direct_dispatch_unsupported",
+            "message": f"CLI '{cli}' không hỗ trợ direct dispatch. Vui lòng dùng chế độ Bàn giao sang IDE.",
+        }
+    if not mid:
+        return {"ok": False, "error_code": "missing_model", "message": "model_id is required."}
+
+    cwd = worktree_path if (worktree_path and Path(worktree_path).is_dir()) else str(HUB_ROOT)
+    bounded_timeout = max(20, min(int(timeout_sec or 110), 180))
+    t0 = time.perf_counter()
+
+    if cli == "agy":
+        # Keep Windows CLI argument length safely under CreateProcess limit
+        # Note: in non-interactive --mode plan, shell/Bash commands are denied; instruct agent to use read-only file tools only.
+        safe_prompt = (prompt + "\n[Lưu ý runtime: chế độ chỉ đọc không tương tác, không chạy lệnh Bash/shell; chỉ đọc tệp hoặc trả lời trực tiếp bằng văn bản tiếng Việt.]")[:14000]
+        cmd = ["agy", "--mode", "plan", "--model", mid, "--output-format", "json"]
+        if external_session_id and re.match(r"^[A-Za-z0-9._:-]{4,120}$", external_session_id):
+            cmd.extend(["--conversation", external_session_id])
+        cmd.extend(["--print", safe_prompt])
+        rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True)
+    elif cli == "claude":
+        cmd = ["claude", "-p", "--tools", "", "--output-format", "json", "--model", mid]
+        rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True, stdin_text=prompt[:16000])
+    else:  # codex
+        cmd = ["codex", "exec", "--json", "--sandbox", "read-only", "--model", mid, "-"]
+        rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True, stdin_text=prompt[:16000])
+
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+    quota_hit = bool(re.search(r"(?i)(?:quota exceeded|rate.limit exceeded|resource.exhausted|quota will reset|usage limit)", (err or out)[:2000]))
+
+    from services.orchestrator.result_parser import parse_agent_stdout
+
+    parsed = parse_agent_stdout(cli_family=cli, stdout=out, stderr=err, exit_code=rc)
+    ext_sid, reported_model = _extract_cli_session_and_model(out)
+    final_answer = parsed["final_answer"]
+    delivery_status = parsed["result_delivery_status"]
+    succeeded = (rc == 0) and (delivery_status == "delivered") and bool(final_answer) and (not quota_hit)
+
+    error_code = None
+    message = "Đã nhận kết quả thực tế từ subscription CLI."
+    if quota_hit:
+        error_code = "quota_exceeded"
+        message = parsed["error_excerpt"] or f"Model '{mid}' ({cli}) đã hết hạn mức quota."
+    elif not succeeded:
+        error_code = "missing_final_answer" if rc == 0 else f"cli_exit_{rc}"
+        message = parsed["error_excerpt"] or f"CLI `{cli}` kết thúc với mã lỗi {rc}."
+
+    return {
+        "ok": succeeded,
+        "cli_family": cli,
+        "requested_model": mid,
+        "reported_model": reported_model,
+        "external_session_id": ext_sid,
+        "duration_ms": duration_ms,
+        "exit_code": rc,
+        "result_delivery_status": delivery_status,
+        "final_answer": final_answer,
+        "truncated": parsed["truncated"],
+        "usage": parsed["usage"],
+        "error_code": error_code,
+        "message": message,
+    }
+
+
 def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
     expected_token = env.get("BRIDGE_RUNNER_TOKEN", "")
 
@@ -718,6 +833,21 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
                     worktree_path=body.get("worktree_path"),
                 )
                 self._send(200 if res["ok"] else 409, res)
+                return
+
+            if self.path == "/host/subscription-chat":
+                res = run_subscription_chat(
+                    env,
+                    cli_family=str(body.get("cli_family") or ""),
+                    model_id=str(body.get("model_id") or ""),
+                    prompt=str(body.get("prompt") or ""),
+                    mode=str(body.get("mode") or "chat"),
+                    worktree_path=body.get("worktree_path"),
+                    external_session_id=body.get("external_session_id"),
+                    thinking_level=body.get("thinking_level"),
+                    timeout_sec=int(body.get("timeout_sec") or 110),
+                )
+                self._send(200 if res["ok"] else 422, res)
                 return
 
             if self.path in ("/host/mcp/health", "/host/mcp/discover", "/host/mcp/invoke", "/host/mcp/stop"):

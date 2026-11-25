@@ -166,18 +166,22 @@ def test_p16_p17_p18_api_agent_tool_calls_budget_guard_and_usage_honesty(client)
     assert "--- a/demo.txt" in run["patch_diff"]
     assert run["spent_budget_usd"] > 0 and run["reserved_budget_usd"] == 0
 
-    # Verify Execution Map traces recorded both allowed & denied tool calls AND honest token metrics (no reasoning double-count!)
+    # Verify Execution Map traces recorded both allowed & denied tool calls AND excluded Mock provider from live AI totals (P19A.2)
     tr = client.get(f"/v2/traces?project_id={pid}", headers=h("tok-read")).json()
     steps = tr["items"]
     assert any(s["tool_name"] == "doc_lookup" and s["status"] == "succeeded" for s in steps)
     assert any(s["tool_name"] == denied_tool_name and s["status"] == "blocked" for s in steps)
     m = tr["metrics"]
-    assert m["input_tokens"] == 1100
-    assert m["output_tokens"] == 350
-    assert m["reasoning_tokens"] == 90
-    assert m["cache_read_tokens"] == 300
-    # Known subtotal = 1100 + 350 + 300 = 1750 (NEVER double-counts 90 reasoning!)
-    assert m["known_token_subtotal"] == 1750
+    assert m["simulation_excluded_steps"] >= 2
+    assert m["input_tokens"] is None
+    assert m["output_tokens"] is None
+    assert m["cost_usd"] is None
+    # Per-request audit records on the Mock run still preserve exact simulated counters
+    reqs = run["provider_requests"]
+    assert sum(r["input_tokens"] for r in reqs) == 1100
+    assert sum(r["output_tokens"] for r in reqs) == 350
+    assert sum(r["reasoning_tokens"] for r in reqs) == 90
+    assert sum(r["cached_input_tokens"] for r in reqs) == 300
 
     # 3. Budget Controller blocks call exceeding tiny budget ($0.0001 < conservative reserve)
     run_b = client.post(

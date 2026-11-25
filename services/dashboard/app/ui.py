@@ -371,11 +371,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <!-- 7b. Kế hoạch & Duyệt DAG (V2) -->
+    <!-- 7b. Agent Control Center (P19A.2: Agent/Model Enable-Disable, Quota & Active Sessions) -->
     <section id="tab-agents" class="panel"><h2>Agent Control Center</h2>
+      <div class="card" style="margin-bottom:14px">
+        <div class="row-actions" style="justify-content:space-between;margin-bottom:8px">
+          <h3 style="margin:0">Quản lý Agent, Model &amp; Hạn mức Quota (Thuê bao · API · Cục bộ)</h3>
+          <div class="row-actions">
+            <button class="secondary" id="agent-sync-catalog-btn" type="button" onclick="syncCatalog()">Đồng bộ model từ Host CLI</button>
+            <button class="secondary" id="agent-controls-refresh" type="button">Làm mới cấu hình</button>
+          </div>
+        </div>
+        <p class="trace-muted" style="margin-top:0">Bật/tắt Agent và từng Model hoạt động độc lập với trạng thái Quota. Tắt Agent chỉ chặn điều phối mới — không tự hủy tác vụ đang chạy.</p>
+        <div id="agent-controls-table">Đang tải danh sách Agent...</div>
+        <hr style="border-color:var(--border);margin:14px 0" />
+        <div class="row-actions" style="justify-content:space-between;margin-bottom:8px">
+          <h3 style="margin:0">Quản lý từng Model &amp; Quota</h3>
+          <select id="agent-model-source-filter" style="width:240px"></select>
+        </div>
+        <div id="agent-models-table">Đang tải danh sách Model...</div>
+      </div>
       <div class="card"><div class="grid"><label>Dự án<select id="agents-proj"></select></label>
       <label>Lọc model, trạng thái hoặc agent<input id="agent-filter" type="search"></label></div>
-      <button class="secondary" id="agent-refresh">Cập nhật</button><p id="agent-counts"></p><div id="agent-rows"></div><div id="agent-detail"></div></div>
+      <button class="secondary" id="agent-refresh">Cập nhật phiên</button><p id="agent-counts"></p><div id="agent-rows"></div><div id="agent-detail"></div></div>
     </section>
     <section id="tab-plans" class="panel">
       <h2>Giao công việc</h2><div class="work-layout"><aside class="card"><h3>Lịch sử</h3>
@@ -838,17 +855,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <!-- P19A: AI Chat Workspace (Chat / Task / Plan & DAG) -->
+    <!-- P19A: AI Chat Workspace (Chat / Task / Plan & DAG + Subscription Agents) -->
     <section id="tab-chat" class="panel">
       <div class="card" style="margin-bottom:12px">
-        <div class="row-actions" style="justify-content:space-between">
+        <div class="row-actions" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
           <h2 style="margin:0">AI Chat Workspace (Chat · Task · Plan &amp; DAG)</h2>
-          <div class="row-actions">
-            <select id="chat-proj-sel" style="width:200px"></select>
-            <select id="chat-biz-sel" style="width:180px"></select>
-            <select id="chat-prov-sel" style="width:220px"></select>
+          <div class="row-actions" style="flex-wrap:wrap;gap:6px">
+            <select id="chat-proj-sel" title="Dự án" style="width:190px"></select>
+            <select id="chat-biz-sel" title="Nghiệp vụ" style="width:165px"></select>
+            <select id="chat-source-sel" title="Nguồn thực thi (Execution Source)" style="width:225px"></select>
+            <select id="chat-model-sel" title="Model thực tế" style="width:235px"></select>
+            <button id="chat-save-default-btn" type="button" class="secondary" style="margin-top:0">Lưu mặc định dự án</button>
             <button id="chat-new-btn" type="button" class="primary" style="margin-top:0">+ Cuộc trò chuyện mới</button>
           </div>
+        </div>
+        <div id="chat-source-meta" class="row-actions" style="margin-top:8px;justify-content:space-between;flex-wrap:wrap;gap:6px">
+          <span class="trace-muted">Đang tải danh sách Nguồn thực thi và Model từ runtime...</span>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:start">
@@ -860,7 +882,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="row-actions" style="justify-content:space-between;margin-bottom:8px">
             <strong id="chat-conv-title">Chọn hoặc tạo cuộc trò chuyện mới</strong>
             <div class="row-actions">
-              <select id="chat-mode-sel" style="width:160px">
+              <select id="chat-mode-sel" style="width:185px">
                 <option value="chat">Chế độ: Chat (Hỏi đáp trực tiếp)</option>
                 <option value="task">Chế độ: Task (1 việc có Tool/Handoff)</option>
                 <option value="plan_dag">Chế độ: Plan &amp; DAG (Nhiều bước)</option>
@@ -875,14 +897,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             </div>
           </div>
           <div id="chat-messages" style="min-height:280px;max-height:460px;overflow-y:auto;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-bottom:10px">
-            <p class="trace-muted">Chế độ Chat trả lời trực tiếp, không bắt buộc lập/duyệt DAG. Mặc định chỉ đọc (read-only).</p>
+            <p class="trace-muted">Chế độ Chat trả lời trực tiếp, không bắt buộc lập/duyệt DAG. Mặc định chỉ đọc (read-only). Không tự động chuyển sang API trả phí.</p>
           </div>
-          <div class="row-actions" style="margin-bottom:6px">
+          <div id="chat-handoff-box" class="card" style="display:none;margin-bottom:10px;border-left:3px solid var(--warn)"></div>
+          <div class="row-actions" style="margin-bottom:6px;flex-wrap:wrap;gap:10px">
             <label style="margin:0"><input id="chat-allow-tools" type="checkbox" style="width:auto" /> Cho phép dùng MCP Tools đã duyệt</label>
-            <label style="margin:0"><input id="chat-consent-chk" type="checkbox" style="width:auto" /> Đồng ý gửi API trả phí (nếu chọn provider trả phí)</label>
-            <label style="margin:0;display:flex;align-items:center;gap:4px">Ngân sách tối đa ($):<input id="chat-budget-inp" type="number" step="0.01" min="0" value="0.05" style="width:80px" /></label>
+            <label style="margin:0"><input id="chat-handoff-chk" type="checkbox" style="width:auto" /> Bàn giao thủ công sang IDE (không gọi trực tiếp)</label>
+            <label style="margin:0"><input id="chat-consent-chk" type="checkbox" style="width:auto" /> Đồng ý gửi API trả phí (chỉ áp dụng cho API Metered)</label>
+            <label style="margin:0;display:flex;align-items:center;gap:4px">Ngân sách API tối đa ($):<input id="chat-budget-inp" type="number" step="0.01" min="0" value="0.05" style="width:80px" /></label>
           </div>
-          <textarea id="chat-input" rows="3" placeholder="Nhập câu hỏi (ví dụ: Xin chào, bạn là ai? · Hãy giới thiệu về bạn · Giải thích đoạn mã...)"></textarea>
+          <textarea id="chat-input" rows="3" placeholder="Nhập yêu cầu (ví dụ: Kiểm tra cấu trúc mã nguồn game Đội Cún Siêu Trí Tuệ chỉ đọc...)"></textarea>
           <div class="row-actions" style="justify-content:flex-end;margin-top:6px">
             <span id="chat-send-state" class="trace-muted"></span>
             <button id="chat-send-btn" type="button" class="primary" style="margin-top:0">Gửi tin nhắn</button>

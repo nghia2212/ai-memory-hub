@@ -187,7 +187,7 @@ def parse_agent_stdout(
                             "output_tokens": _opt_int(u.get("output_tokens")),
                             "cache_read_tokens": _opt_int(u.get("cache_read_tokens", u.get("cache_read_input_tokens"))),
                             "cache_write_tokens": _opt_int(u.get("cache_write_tokens", u.get("cache_creation_input_tokens"))),
-                            "reasoning_tokens": _opt_int(u.get("reasoning_tokens")),
+                            "reasoning_tokens": _opt_int(u.get("reasoning_tokens", u.get("thinking_tokens"))),
                             "cost_usd": _opt_float(cost_val),
                             "measurement_kind": "measured" if has_any else "unavailable",
                             "source": f"{cli_family}_json",

@@ -28,23 +28,40 @@ def _match_pricing(model_id):
     return None
 
 
+def _is_simulation_row(r):
+    prov = str(r.get("provider") or "").strip().lower()
+    mid = str(r.get("model_id") or "").strip().lower()
+    meta = r.get("metadata_json") or {}
+    if isinstance(meta, str):
+        meta = {}
+    return (
+        prov == "mock"
+        or mid.startswith("mock-")
+        or bool(meta.get("simulation"))
+        or str(meta.get("billing_mode") or "").lower() == "mock"
+    )
+
+
 def summarize(rows):
     rows = list(rows)
-    result = {"steps":len(rows)}
+    sim_rows = [r for r in rows if _is_simulation_row(r)]
+    live_rows = [r for r in rows if not _is_simulation_row(r)]
+    result = {"steps":len(rows), "simulation_excluded_steps": len(sim_rows)}
     for key in ("used_mcp","used_memory","used_llm"):
-        result[key] = sum(r.get(key) is True or r.get(key)==1 for r in rows)
-        result[key+"_unknown"] = sum(r.get(key) is None for r in rows)
+        result[key] = sum(r.get(key) is True or r.get(key)==1 for r in live_rows)
+        result[key+"_unknown"] = sum(r.get(key) is None for r in live_rows)
     result["errors"] = sum(r["status"] in ("failed","blocked") for r in rows)
     result["retries"] = sum(bool(r.get("metadata_json",{}).get("retry_of")) for r in rows)
-    result["llm_calls"] = sum(r["step_type"]=="llm_call" and r.get("used_llm") is True for r in rows)
+    result["llm_calls"] = sum(r["step_type"]=="llm_call" and r.get("used_llm") is True for r in live_rows)
     # Canonical session aggregates take precedence over linked per-call records.
-    sessions = {r["session_id"] for r in rows if r["step_type"]=="session_usage" and r.get("session_id")}
-    usage = [r for r in rows if r["step_type"]=="session_usage" or
+    # P19A.2: Mock/simulation records are STRICTLY excluded from live AI token/cost totals.
+    sessions = {r["session_id"] for r in live_rows if r["step_type"]=="session_usage" and r.get("session_id")}
+    usage = [r for r in live_rows if r["step_type"]=="session_usage" or
              (r["step_type"]=="llm_call" and not r.get("session_id"))]
     # Linked model-call counters never enter the aggregate; their session
     # report may be outside the filter and coverage then remains incomplete.
     result["usage_records"] = len(usage)
-    result["excluded_linked_calls"] = sum(r["step_type"]=="llm_call" and bool(r.get("session_id")) for r in rows)
+    result["excluded_linked_calls"] = sum(r["step_type"]=="llm_call" and bool(r.get("session_id")) for r in live_rows)
     result["usage_coverage"] = {}
     for k in COUNTERS:
         values = [r[k] for r in usage if r.get(k) is not None and r.get("metadata_json",{}).get("measurement_kind")=="measured"]

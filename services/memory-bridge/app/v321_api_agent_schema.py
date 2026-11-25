@@ -270,6 +270,7 @@ class ChatConversationCreateRequest(StrictApiAgentModel):
     business_id: str = Field(min_length=1, max_length=64)
     title: str = Field(default="Cuộc trò chuyện mới", min_length=1, max_length=200)
     mode: Literal["chat", "task", "plan_dag"] = "chat"
+    execution_source: str | None = Field(default=None, max_length=64)
     provider_profile_id: str | None = Field(default=None, max_length=80)
     model_id: str | None = Field(default=None, max_length=120)
 
@@ -278,12 +279,100 @@ class ChatMessageSendRequest(StrictApiAgentModel):
     project_id: UUID
     content: str = Field(min_length=1, max_length=16000)
     mode: Literal["chat", "task", "plan_dag"] | None = None
+    execution_source: str | None = Field(default=None, max_length=64)
     provider_profile_id: str | None = Field(default=None, max_length=80)
     model_id: str | None = Field(default=None, max_length=120)
     thinking_level: Literal["none", "low", "medium", "high", "max"] = "none"
     max_budget_usd: float = Field(default=0.05, ge=0.0, le=50.0)
     allow_tools: bool = False
     egress_consent_confirmed: bool = False
+    manual_handoff: bool = False
     idempotency_key: str | None = Field(default=None, max_length=128)
     mock_script: list[dict[str, Any]] | None = None
+
+
+# Migration 14 (strictly additive): P19A.1/P19A.2 Subscription Agents, Controls, Project Defaults & Manual Handoffs
+V321_SUBSCRIPTION_AGENT_SQL = """
+CREATE TABLE IF NOT EXISTS mcp321_agent_controls (
+    source_key TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    disabled_reason TEXT NOT NULL DEFAULT '',
+    updated_by TEXT NOT NULL DEFAULT 'system',
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp321_model_controls (
+    source_key TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    disabled_reason TEXT NOT NULL DEFAULT '',
+    updated_by TEXT NOT NULL DEFAULT 'system',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(source_key, model_id)
+);
+
+CREATE TABLE IF NOT EXISTS mcp321_project_chat_defaults (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    business_id TEXT NOT NULL DEFAULT '',
+    execution_source TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'task' CHECK(mode IN ('chat', 'task', 'plan_dag')),
+    allow_paid_api_fallback INTEGER NOT NULL DEFAULT 0,
+    updated_by TEXT NOT NULL DEFAULT 'admin',
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp321_chat_handoffs (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES mcp321_chat_conversations(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    worktree_id TEXT REFERENCES worktrees(id) ON DELETE SET NULL,
+    source_key TEXT NOT NULL,
+    model_id TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'task',
+    prompt_package TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'awaiting_external' CHECK(status IN ('awaiting_external', 'imported', 'cancelled')),
+    external_plan_id TEXT,
+    external_session_id TEXT,
+    provider_reported_model TEXT,
+    result_content TEXT NOT NULL DEFAULT '',
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mcp321_chat_handoffs_conv ON mcp321_chat_handoffs(conversation_id, created_at DESC);
+
+ALTER TABLE mcp321_chat_conversations ADD COLUMN execution_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE mcp321_chat_conversations ADD COLUMN external_session_id TEXT NOT NULL DEFAULT '';
+"""
+
+
+class AgentControlUpdateRequest(StrictApiAgentModel):
+    enabled: bool
+    disabled_reason: str = Field(default="", max_length=300)
+
+
+class ModelControlUpdateRequest(StrictApiAgentModel):
+    source_key: str = Field(min_length=2, max_length=64)
+    model_id: str = Field(min_length=1, max_length=120)
+    enabled: bool
+    disabled_reason: str = Field(default="", max_length=300)
+
+
+class ProjectChatDefaultsRequest(StrictApiAgentModel):
+    business_id: str = Field(default="", max_length=64)
+    execution_source: str = Field(default="", max_length=64)
+    model_id: str = Field(default="", max_length=120)
+    mode: Literal["chat", "task", "plan_dag"] = "task"
+    allow_paid_api_fallback: bool = False
+
+
+class ChatHandoffImportRequest(StrictApiAgentModel):
+    project_id: UUID
+    result_content: str = Field(min_length=1, max_length=16000)
+    external_plan_id: str | None = Field(default=None, max_length=120)
+    external_session_id: str | None = Field(default=None, max_length=120)
+    provider_reported_model: str | None = Field(default=None, max_length=120)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
 

@@ -9,12 +9,16 @@ from .config import Settings
 from .security import AuthPrincipal as Principal, authenticate_token, extract_bearer_token, require_any_scope, require_scope
 from .v321_agent_engine import V321AgentExecutionEngine
 from .v321_api_agent_schema import (
+    AgentControlUpdateRequest,
     AgentRunCreateRequest,
     AgentRunPreviewRequest,
     ChatConversationCreateRequest,
+    ChatHandoffImportRequest,
     ChatMessageSendRequest,
     HybridPlanCreateRequest,
     HybridStageUpdateRequest,
+    ModelControlUpdateRequest,
+    ProjectChatDefaultsRequest,
     ProjectEgressPolicyRequest,
     ProviderConnectionTestRequest,
     ProviderProfilePatchRequest,
@@ -22,6 +26,7 @@ from .v321_api_agent_schema import (
 )
 from .v321_chat_service import V321ChatService
 from .v321_provider_service import V321ProviderService
+from .v321_subscription_service import V321SubscriptionService
 
 
 def create_v321_api_agent_router(
@@ -30,6 +35,7 @@ def create_v321_api_agent_router(
     cfg: Settings,
     *,
     chat_svc: V321ChatService | None = None,
+    sub_svc: V321SubscriptionService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/v321", tags=["v3.2.1 p14-p19 ai providers & api agent"])
 
@@ -138,5 +144,42 @@ def create_v321_api_agent_router(
         @router.delete("/chat/conversations/{conversation_id}")
         def archive_chat_conversation(conversation_id: str, project_id: UUID, p: Principal = Depends(admin)):
             return chat_svc.archive_conversation(conversation_id, str(project_id))
+
+        @router.get("/chat/conversations/{conversation_id}/handoffs")
+        def list_chat_handoffs(conversation_id: str, project_id: UUID, p: Principal = Depends(reader)):
+            return chat_svc.list_handoffs(conversation_id, str(project_id))
+
+        @router.post("/chat/handoffs/{handoff_id}/import")
+        def import_chat_handoff(handoff_id: str, req: ChatHandoffImportRequest, p: Principal = Depends(admin)):
+            return chat_svc.import_handoff_result(handoff_id, req, actor=p.role)
+
+    # --- P19A.1 / P19A.2: Subscription Execution Sources, Agent/Model Controls & Project Defaults ---
+    if sub_svc is not None:
+        @router.get("/execution-sources")
+        def list_execution_sources(
+            project_id: UUID | None = None,
+            probe_host: bool = Query(True),
+            p: Principal = Depends(reader),
+        ):
+            return sub_svc.list_execution_sources(
+                project_id=str(project_id) if project_id else None,
+                probe_host=probe_host,
+            )
+
+        @router.put("/agent-controls/{source_key}")
+        def update_agent_control(source_key: str, req: AgentControlUpdateRequest, p: Principal = Depends(admin)):
+            return sub_svc.set_agent_control(source_key, req, actor=p.role)
+
+        @router.put("/model-controls")
+        def update_model_control(req: ModelControlUpdateRequest, p: Principal = Depends(admin)):
+            return sub_svc.set_model_control(req, actor=p.role)
+
+        @router.get("/projects/{project_id}/chat-defaults")
+        def get_project_chat_defaults(project_id: UUID, p: Principal = Depends(reader)):
+            return sub_svc.get_project_chat_defaults(str(project_id))
+
+        @router.put("/projects/{project_id}/chat-defaults")
+        def set_project_chat_defaults(project_id: UUID, req: ProjectChatDefaultsRequest, p: Principal = Depends(admin)):
+            return sub_svc.set_project_chat_defaults(str(project_id), req, actor=p.role)
 
     return router

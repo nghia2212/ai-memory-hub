@@ -533,6 +533,21 @@ class V2BridgeService:
             if not eligible:
                 raise BridgeError(409, "quota_exhausted", "All eligible models have exhausted quota")
 
+            # P19A.2: Enforce centralized Agent & Model enable/disable controls in backend routing
+            cli_to_source = {"agy": "antigravity", "claude": "claude_code", "codex": "codex_cli", "gemini": "gemini_cli"}
+            agent_ctrls = {r["source_key"]: bool(r["enabled"]) for r in conn.execute("SELECT source_key, enabled FROM mcp321_agent_controls").fetchall()}
+            model_ctrls = {(r["source_key"], r["model_id"]): bool(r["enabled"]) for r in conn.execute("SELECT source_key, model_id, enabled FROM mcp321_model_controls").fetchall()}
+            def _ctrl_enabled(m: dict[str, Any]) -> bool:
+                skey = cli_to_source.get(str(m.get("cli_family") or m["provider"]), str(m["provider"]))
+                if agent_ctrls.get(skey) is False or agent_ctrls.get(str(m["provider"])) is False:
+                    return False
+                if model_ctrls.get((skey, m["model_id"])) is False or model_ctrls.get((str(m["provider"]), m["model_id"])) is False:
+                    return False
+                return True
+            eligible = [m for m in eligible if _ctrl_enabled(m)]
+            if not eligible:
+                raise BridgeError(403, "agent_or_model_disabled", "All eligible models are disabled in Agent Control Center")
+
             evals = conn.execute(
                 """
                 SELECT * FROM v2_model_evaluations
@@ -1925,8 +1940,14 @@ class V2BridgeService:
     def get_usage_summary(self, project_id: str) -> dict[str, Any]:
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)
+            # P19A.2: Exclude mock/simulation sessions from live AI token & cost statistics
             sessions = conn.execute(
-                "SELECT id, role FROM v2_sessions WHERE project_id = ?",
+                """
+                SELECT id, role FROM v2_sessions
+                WHERE project_id = ?
+                  AND LOWER(COALESCE(provider, '')) != 'mock'
+                  AND LOWER(COALESCE(model_id, '')) NOT LIKE 'mock-%'
+                """,
                 (project_id,),
             ).fetchall()
 
