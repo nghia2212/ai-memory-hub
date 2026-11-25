@@ -454,8 +454,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </section>
     <section id="tab-traces" class="panel">
-      <h2>Bản đồ thực thi</h2>
-      <div class="card">
+      <div class="trace-page-head">
+        <h2>Bản đồ thực thi</h2>
+        <div class="row-actions">
+          <button id="trace-toggle-filters" type="button" class="secondary">Bộ lọc</button>
+          <button id="trace-toggle-inspector" type="button" class="secondary">Token Telemetry Inspector</button>
+          <button id="trace-export-json" type="button" class="secondary">Xuất JSON</button>
+          <button id="trace-export-csv" type="button" class="secondary">Xuất CSV</button>
+          <button id="trace-refresh" type="button">Tải trace</button>
+        </div>
+      </div>
+
+      <div id="trace-filter-card" class="card trace-filter-card">
         <div class="trace-filters">
           <label>Dự án<select id="trace-proj"></select></label>
           <label>Worktree<select id="trace-wt"></select></label>
@@ -471,15 +481,63 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <label>Sắp xếp<select id="trace-sort"><option value="time_asc">Thời gian tăng</option><option value="time_desc">Mới nhất</option><option value="duration_desc">Lâu nhất</option><option value="status">Trạng thái</option></select></label>
           <label>Chế độ<select id="trace-mode"><option value="graph">Graph View</option><option value="swim">Swimlane View</option><option value="timeline">Timeline View</option><option value="table">Table View</option></select></label>
         </div>
-        <button id="trace-refresh" type="button">Tải trace</button>
-        <p id="trace-count" aria-live="polite"></p>
-        <button id="trace-prev" type="button" class="secondary">Trang trước</button>
-        <button id="trace-next" type="button" class="secondary">Trang sau</button>
       </div>
+
+      <details id="trace-summary-wrap" class="card trace-collapsible" open>
+        <summary><strong>Tổng quan Nhiệm vụ / Phiên (Task &amp; Session Summary)</strong> <span id="trace-live-badge" class="badge muted">Idle</span></summary>
+        <div id="trace-summary" class="trace-summary-grid"></div>
+      </details>
+
+      <details id="trace-groups-wrap" class="card trace-collapsible" open>
+        <summary><strong>Tổng hợp theo Nhóm / Lane (Group Summary)</strong></summary>
+        <div id="trace-groups" class="trace-groups-grid"></div>
+      </details>
+
       <div id="trace-metrics" class="trace-metrics" aria-live="polite"></div>
-      <div class="trace-layout">
-        <div class="card trace-canvas" id="trace-view"></div>
-        <aside class="card" id="trace-detail">Chọn step để xem bằng chứng.</aside>
+
+      <div id="trace-inspector-card" class="card" hidden>
+        <div class="trace-page-head">
+          <h3>Token Telemetry Inspector — Giải thích trạng thái đo lường</h3>
+          <button id="trace-inspector-close" type="button" class="secondary">Đóng</button>
+        </div>
+        <div id="trace-inspector-body">Đang tải thông tin telemetry...</div>
+      </div>
+
+      <div id="trace-workspace" class="trace-workspace">
+        <div class="trace-toolbar">
+          <div class="trace-toolbar-group">
+            <button id="trace-mode-graph" type="button" class="secondary trace-mode-btn" data-mode="graph">Graph View</button>
+            <button id="trace-mode-swim" type="button" class="secondary trace-mode-btn" data-mode="swim">Swimlane View</button>
+            <button id="trace-mode-timeline" type="button" class="secondary trace-mode-btn" data-mode="timeline">Timeline View</button>
+            <button id="trace-mode-table" type="button" class="secondary trace-mode-btn" data-mode="table">Table View</button>
+          </div>
+          <div class="trace-toolbar-group">
+            <button id="trace-zoom-out" type="button" class="secondary" title="Thu nhỏ">-</button>
+            <span id="trace-zoom-label" class="trace-zoom-label">100%</span>
+            <button id="trace-zoom-in" type="button" class="secondary" title="Phóng to">+</button>
+            <button id="trace-zoom-reset" type="button" class="secondary">100%</button>
+            <button id="trace-fit" type="button" class="secondary">Fit</button>
+          </div>
+          <div class="trace-toolbar-group">
+            <button id="trace-density" type="button" class="secondary">Compact</button>
+            <button id="trace-hide-empty" type="button" class="secondary">Ẩn lane trống</button>
+            <button id="trace-collapse-all" type="button" class="secondary">Thu gọn nhóm</button>
+            <button id="trace-fullscreen" type="button" class="secondary">Mở rộng</button>
+            <button id="trace-detail-toggle" type="button" class="secondary">Chi tiết</button>
+          </div>
+          <div class="trace-toolbar-group trace-pager">
+            <span id="trace-count" aria-live="polite"></span>
+            <button id="trace-prev" type="button" class="secondary">Trước</button>
+            <button id="trace-next" type="button" class="secondary">Sau</button>
+          </div>
+        </div>
+        <div class="trace-layout" id="trace-layout">
+          <div class="trace-canvas" id="trace-canvas-wrap">
+            <div class="trace-stage" id="trace-view"></div>
+          </div>
+          <div class="trace-resizer" id="trace-resizer" title="Kéo để thay đổi chiều rộng Detail Panel"></div>
+          <aside class="trace-detail-panel" id="trace-detail">Chọn step để xem bằng chứng.</aside>
+        </div>
       </div>
     </section>
   </main>
