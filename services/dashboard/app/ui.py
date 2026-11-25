@@ -264,6 +264,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 6. Sự kiện & Kinh nghiệm -->
     <section id="tab-events" class="panel">
+      <div class="card" style="margin-bottom:16px">
+        <h2>AI Agents kết nối (Connected AI Agents)</h2>
+        <div id="agents-status-list">Chọn dự án để xem trạng thái Claude / Gemini / Codex / Hermes.</div>
+      </div>
       <div class="card">
         <h2>Sự kiện, Lỗi & Kinh nghiệm</h2>
         <div class="row-actions">
@@ -567,7 +571,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const pid = document.getElementById("ev-proj").value;
       if (!pid) return;
       try {
-        const data = await apiFetch(`/api/events?project_id=${encodeURIComponent(pid)}`);
+        const [data, agents] = await Promise.all([
+          apiFetch(`/api/events?project_id=${encodeURIComponent(pid)}`),
+          apiFetch(`/api/agents/status?project_id=${encodeURIComponent(pid)}`)
+        ]);
+        const agentRows = (agents.items || []).map(a => `
+          <tr><td><strong>${a.source_agent}</strong></td><td>${a.last_kind}</td><td>${a.task_id}</td><td>${a.branch || "-"} (${(a.head_commit || "").slice(0,7)})</td><td>${a.last_seen_at}</td></tr>
+        `).join("");
+        document.getElementById("agents-status-list").innerHTML = agentRows
+          ? `<table><tr><th>Agent</th><th>Sự kiện cuối</th><th>Task</th><th>Nhánh / Commit</th><th>Cập nhật</th></tr>${agentRows}</table>`
+          : `<p style="color:var(--muted)">Chưa có sự kiện agent nào cho dự án này.</p>`;
         const rows = (data.items || []).map(ev => `
           <tr><td>${ev.task_id}</td><td>${ev.kind}</td><td>${ev.approved ? "Đã duyệt" : "Chờ"}</td><td><code>${JSON.stringify(ev.payload)}</code></td></tr>
         `).join("");

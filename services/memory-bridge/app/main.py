@@ -208,6 +208,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         return service.get_handoff(task_id=task_id, project_id=str(project_id), worktree_id=str(worktree_id))
 
+    @app.get("/v1/agents/status")
+    async def get_agents_status(
+        project_id: UUID,
+        worktree_id: UUID | None = Query(default=None),
+        _: AuthPrincipal = Depends(require_read),
+    ) -> dict[str, Any]:
+        return service.get_agents_status(
+            str(project_id),
+            worktree_id=str(worktree_id) if worktree_id else None,
+        )
+
     # --- Worker (Hermes) contract ---
     @app.get("/v1/worker/events")
     async def worker_events(

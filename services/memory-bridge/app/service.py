@@ -193,6 +193,56 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
+    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
+        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
+        with self.db.read_conn() as conn:
+            if worktree_id:
+                self._ensure_worktree(conn, project_id, worktree_id)
+                wt_clause = "AND e.worktree_id = ?"
+                params: list[Any] = [project_id, worktree_id]
+            else:
+                self._ensure_project(conn, project_id)
+                wt_clause = ""
+                params = [project_id]
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.source_agent,
+                    e.kind AS last_kind,
+                    e.task_id,
+                    e.worktree_id,
+                    w.branch,
+                    w.head_commit,
+                    e.created_at AS last_seen_at
+                FROM events e
+                JOIN worktrees w ON w.id = e.worktree_id
+                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
+                ORDER BY e.created_at DESC
+                """,
+                params,
+            ).fetchall()
+
+            seen: set[tuple[str, str]] = set()
+            items: list[dict[str, Any]] = []
+            for r in rows:
+                key = (r["worktree_id"], r["source_agent"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "source_agent": r["source_agent"],
+                        "last_kind": r["last_kind"],
+                        "task_id": r["task_id"],
+                        "worktree_id": r["worktree_id"],
+                        "branch": r["branch"],
+                        "head_commit": r["head_commit"],
+                        "last_seen_at": r["last_seen_at"],
+                    }
+                )
+            return {"items": items}
+
     def create_project(self, req: ProjectCreateRequest) -> dict[str, Any]:
         now = utc_now_iso()
         project_id = str(uuid.uuid4())
@@ -253,6 +303,56 @@ class MemoryBridgeService:
                 }
                 for r in rows
             ]
+            return {"items": items}
+
+    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
+        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
+        with self.db.read_conn() as conn:
+            if worktree_id:
+                self._ensure_worktree(conn, project_id, worktree_id)
+                wt_clause = "AND e.worktree_id = ?"
+                params: list[Any] = [project_id, worktree_id]
+            else:
+                self._ensure_project(conn, project_id)
+                wt_clause = ""
+                params = [project_id]
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.source_agent,
+                    e.kind AS last_kind,
+                    e.task_id,
+                    e.worktree_id,
+                    w.branch,
+                    w.head_commit,
+                    e.created_at AS last_seen_at
+                FROM events e
+                JOIN worktrees w ON w.id = e.worktree_id
+                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
+                ORDER BY e.created_at DESC
+                """,
+                params,
+            ).fetchall()
+
+            seen: set[tuple[str, str]] = set()
+            items: list[dict[str, Any]] = []
+            for r in rows:
+                key = (r["worktree_id"], r["source_agent"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "source_agent": r["source_agent"],
+                        "last_kind": r["last_kind"],
+                        "task_id": r["task_id"],
+                        "worktree_id": r["worktree_id"],
+                        "branch": r["branch"],
+                        "head_commit": r["head_commit"],
+                        "last_seen_at": r["last_seen_at"],
+                    }
+                )
             return {"items": items}
 
     def create_worktree(self, project_id: str, req: WorktreeCreateRequest) -> dict[str, Any]:
@@ -487,6 +587,56 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
+    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
+        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
+        with self.db.read_conn() as conn:
+            if worktree_id:
+                self._ensure_worktree(conn, project_id, worktree_id)
+                wt_clause = "AND e.worktree_id = ?"
+                params: list[Any] = [project_id, worktree_id]
+            else:
+                self._ensure_project(conn, project_id)
+                wt_clause = ""
+                params = [project_id]
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.source_agent,
+                    e.kind AS last_kind,
+                    e.task_id,
+                    e.worktree_id,
+                    w.branch,
+                    w.head_commit,
+                    e.created_at AS last_seen_at
+                FROM events e
+                JOIN worktrees w ON w.id = e.worktree_id
+                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
+                ORDER BY e.created_at DESC
+                """,
+                params,
+            ).fetchall()
+
+            seen: set[tuple[str, str]] = set()
+            items: list[dict[str, Any]] = []
+            for r in rows:
+                key = (r["worktree_id"], r["source_agent"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "source_agent": r["source_agent"],
+                        "last_kind": r["last_kind"],
+                        "task_id": r["task_id"],
+                        "worktree_id": r["worktree_id"],
+                        "branch": r["branch"],
+                        "head_commit": r["head_commit"],
+                        "last_seen_at": r["last_seen_at"],
+                    }
+                )
+            return {"items": items}
+
     def search_memory(self, req: MemorySearchRequest) -> dict[str, Any]:
         t0 = time.perf_counter()
         project_id = str(req.project_id)
@@ -574,12 +724,15 @@ class MemoryBridgeService:
             event_id = str(uuid.uuid4())
             now = utc_now_iso()
             redacted = redact_payload(req.payload)
+            source_agent = req.source_agent or (
+                str(req.payload.get("source_agent"))[:64] if req.payload.get("source_agent") else None
+            )
             conn.execute(
                 """
                 INSERT INTO events (
                     id, idempotency_key, payload_hash, project_id, worktree_id, task_id,
-                    kind, payload_json, approved, redacted_payload_json, processed_by_worker, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    source_agent, kind, payload_json, approved, redacted_payload_json, processed_by_worker, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     event_id,
@@ -588,6 +741,7 @@ class MemoryBridgeService:
                     project_id,
                     worktree_id,
                     req.task_id,
+                    source_agent,
                     req.kind,
                     json.dumps(req.payload, ensure_ascii=False),
                     1 if req.approved else 0,
@@ -600,6 +754,7 @@ class MemoryBridgeService:
                 "project_id": project_id,
                 "worktree_id": worktree_id,
                 "task_id": req.task_id,
+                "source_agent": source_agent,
                 "kind": req.kind,
                 "approved": req.approved,
                 "created_at": now,
@@ -639,6 +794,56 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
+    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
+        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
+        with self.db.read_conn() as conn:
+            if worktree_id:
+                self._ensure_worktree(conn, project_id, worktree_id)
+                wt_clause = "AND e.worktree_id = ?"
+                params: list[Any] = [project_id, worktree_id]
+            else:
+                self._ensure_project(conn, project_id)
+                wt_clause = ""
+                params = [project_id]
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.source_agent,
+                    e.kind AS last_kind,
+                    e.task_id,
+                    e.worktree_id,
+                    w.branch,
+                    w.head_commit,
+                    e.created_at AS last_seen_at
+                FROM events e
+                JOIN worktrees w ON w.id = e.worktree_id
+                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
+                ORDER BY e.created_at DESC
+                """,
+                params,
+            ).fetchall()
+
+            seen: set[tuple[str, str]] = set()
+            items: list[dict[str, Any]] = []
+            for r in rows:
+                key = (r["worktree_id"], r["source_agent"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "source_agent": r["source_agent"],
+                        "last_kind": r["last_kind"],
+                        "task_id": r["task_id"],
+                        "worktree_id": r["worktree_id"],
+                        "branch": r["branch"],
+                        "head_commit": r["head_commit"],
+                        "last_seen_at": r["last_seen_at"],
+                    }
+                )
+            return {"items": items}
+
     def get_worker_events(self, project_id: str | None = None, limit: int = 10) -> dict[str, Any]:
         with self.db.read_conn() as conn:
             clauses = ["e.approved = 1", "e.processed_by_worker = 0", "p.hermes_approved = 1"]
@@ -673,6 +878,56 @@ class MemoryBridgeService:
                 }
                 for r in rows
             ]
+            return {"items": items}
+
+    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
+        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
+        with self.db.read_conn() as conn:
+            if worktree_id:
+                self._ensure_worktree(conn, project_id, worktree_id)
+                wt_clause = "AND e.worktree_id = ?"
+                params: list[Any] = [project_id, worktree_id]
+            else:
+                self._ensure_project(conn, project_id)
+                wt_clause = ""
+                params = [project_id]
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.source_agent,
+                    e.kind AS last_kind,
+                    e.task_id,
+                    e.worktree_id,
+                    w.branch,
+                    w.head_commit,
+                    e.created_at AS last_seen_at
+                FROM events e
+                JOIN worktrees w ON w.id = e.worktree_id
+                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
+                ORDER BY e.created_at DESC
+                """,
+                params,
+            ).fetchall()
+
+            seen: set[tuple[str, str]] = set()
+            items: list[dict[str, Any]] = []
+            for r in rows:
+                key = (r["worktree_id"], r["source_agent"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "source_agent": r["source_agent"],
+                        "last_kind": r["last_kind"],
+                        "task_id": r["task_id"],
+                        "worktree_id": r["worktree_id"],
+                        "branch": r["branch"],
+                        "head_commit": r["head_commit"],
+                        "last_seen_at": r["last_seen_at"],
+                    }
+                )
             return {"items": items}
 
     def submit_worker_result(self, req: WorkerResultRequest) -> tuple[int, dict[str, Any]]:

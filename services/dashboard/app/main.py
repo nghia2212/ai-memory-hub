@@ -140,6 +140,13 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_events(project_id: str) -> JSONResponse:
         return await _proxy_bridge("GET", "/v1/events", params={"project_id": project_id})
 
+    @app.get("/api/agents/status")
+    async def api_agents_status(project_id: str, worktree_id: str | None = None) -> JSONResponse:
+        params: dict[str, Any] = {"project_id": project_id}
+        if worktree_id:
+            params["worktree_id"] = worktree_id
+        return await _proxy_bridge("GET", "/v1/agents/status", params=params)
+
     @app.get("/api/handoffs/{task_id}")
     async def api_handoffs(task_id: str, project_id: str, worktree_id: str) -> JSONResponse:
         return await _proxy_bridge(

@@ -20,7 +20,8 @@ Kiểm thử trên Python `3.13.17` (Container `Dockerfile` dùng `python:3.12-s
 
 ### Memory Bridge (`services/memory-bridge/`, cổng `8082`)
 - **FastAPI + FastMCP ASGI:** Gắn `mcp.http_app(path="/")` tại `/mcp` bằng `combine_lifespans(bridge_lifespan, mcp_app.lifespan)` (tránh lỗi `/mcp/mcp` và khởi tạo `StreamableHTTPSessionManager` đúng chuẩn).
-- **SQLite FTS5 (`app/db.py`):** Sole DB writer với `RLock`, `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, `busy_timeout=5000`, bảng `schema_migrations` có kiểm soát phiên bản, FTS5 `unicode61`.
+- **Tương thích V1.1 Multi-Agent Status (`GET /v1/agents/status`, `POST /v1/events`):** Hỗ trợ `source_agent`, `timestamp`, `task_id` tùy chọn từ hook/CLI của Agent C (`claude`, `gemini`, `codex`, `hermes`) và migration v2 (`add_events_source_agent`).
+- **SQLite FTS5 (`app/db.py`):** Sole DB writer với `RLock`, `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, `busy_timeout=5000`, bảng `schema_migrations` (v2) có kiểm soát phiên bản, FTS5 `unicode61`.
 - **Backup & Restore (`app/db.py`):** Sử dụng `sqlite3.Connection.backup()` trực tuyến, ghi manifest + SHA-256 checksum, khôi phục bằng khóa bảo trì (`503` khi đang restore), kiểm tra checksum + `PRAGMA integrity_check`, và tự động rollback về bản sao an toàn nếu lỗi.
 - **Bảo mật & Phạm vi (`app/security.py`, `app/schemas.py`, `app/service.py`):**
   - Bearer token tách biệt 4 vai trò: `read`, `write`, `admin`, `worker`.
@@ -43,10 +44,10 @@ Lệnh đã chạy:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/bridge tests/dashboard -v
 ```
-Kết quả thực tế: **9 passed in 5.26s**
-- `tests/bridge/test_bridge_core.py`: 6/6 PASSED (RBAC, validation/unsafe paths, cross-project/worktree isolation + Vietnamese FTS5 + SQL/FTS injection + candidate visibility, strict serialized budget, idempotency + worker redaction + real-only metrics, backup/corrupt-rejection/restore + restart persistence).
+Kết quả thực tế: **10 passed**
+- `tests/bridge/test_bridge_core.py`: 7/7 PASSED (RBAC, validation/unsafe paths, cross-project/worktree isolation + Vietnamese FTS5 + SQL/FTS injection + candidate visibility, strict serialized budget, idempotency + worker redaction + real-only metrics, backup/corrupt-rejection/restore + restart persistence, V1.1 multi-agent events & `/v1/agents/status` isolation).
 - `tests/bridge/test_mcp_handshake.py`: 1/1 PASSED (401 unauthenticated `/mcp`, Streamable HTTP handshake, `list_tools`, `save_decision`, `save_task_result`, `get_handoff`, `get_project_context`).
-- `tests/dashboard/test_dashboard.py`: 2/2 PASSED (Vietnamese UI + no leaked secrets, auth/Origin/CSRF checks + server-side proxy).
+- `tests/dashboard/test_dashboard.py`: 2/2 PASSED (Vietnamese UI + no leaked secrets, auth/Origin/CSRF checks + server-side proxy + `/api/agents/status`).
 
 ## 4. Hướng dẫn tích hợp cho Lead
 

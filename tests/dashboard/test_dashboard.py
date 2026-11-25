@@ -154,7 +154,12 @@ def test_dashboard_auth_origin_csrf_and_proxy(dash_client: TestClient):
     assert r_create.status_code == 201
     assert r_create.json()["name"] == "Dự án thử nghiệm"
 
-    # Read-only metrics & backup via proxy
+    # Read-only metrics & agents status via proxy
     metrics = dash_client.get("/api/metrics")
     assert metrics.status_code == 200
     assert metrics.json()["measured_tokens_available"] is False
+
+    pid = r_create.json()["project_id"]
+    agents_st = dash_client.get(f"/api/agents/status?project_id={pid}")
+    assert agents_st.status_code == 200
+    assert agents_st.json()["items"] == []

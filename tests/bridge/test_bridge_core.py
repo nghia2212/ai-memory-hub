@@ -335,3 +335,39 @@ def test_backup_restore_rollback_and_restart_persistence(tmp_path: Path):
         items = c2.get("/v1/projects", headers=h("tok-read")).json()["items"]
         assert len(items) == 1
         assert items[0]["project_id"] == p1
+
+
+def test_v11_multi_agent_events_and_agents_status(client: TestClient):
+    p1, w1 = _register_project_and_worktree(client, "v11-proj", "git:v11", "D:\\repo\\v11")
+    p2, w2 = _register_project_and_worktree(client, "v11-other", "git:v11-other", "D:\\repo\\v11-other")
+
+    # Agent C V1.1 payload shape (includes source_agent & timestamp, optional task_id)
+    for idx, (agent, kind) in enumerate([("claude", "session_start"), ("claude", "session_end"), ("codex", "handoff_created")]):
+        res = client.post(
+            "/v1/events",
+            headers=h("tok-write"),
+            json={
+                "project_id": p1,
+                "worktree_id": w1,
+                "source_agent": agent,
+                "kind": kind,
+                "timestamp": 1764038400 + idx,
+                "payload": {"note": f"{agent}-{kind}"},
+                "idempotency_key": f"v11-ev-{idx}",
+            },
+        )
+        assert res.status_code == 201
+        assert res.json()["source_agent"] == agent
+
+    st = client.get(f"/v1/agents/status?project_id={p1}&worktree_id={w1}", headers=h("tok-read"))
+    assert st.status_code == 200
+    items = {item["source_agent"]: item for item in st.json()["items"]}
+    assert set(items.keys()) == {"claude", "codex"}
+    assert items["claude"]["last_kind"] == "session_end"
+    assert items["claude"]["branch"] == "main"
+    assert items["claude"]["head_commit"] == "abc1234"
+
+    # Cross-project isolation on /v1/agents/status
+    st_p2 = client.get(f"/v1/agents/status?project_id={p2}&worktree_id={w2}", headers=h("tok-read"))
+    assert st_p2.status_code == 200
+    assert st_p2.json()["items"] == []

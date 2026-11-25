@@ -15,7 +15,7 @@ from typing import Iterator
 
 from .errors import BridgeError
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 MIGRATIONS: list[tuple[int, str, str]] = [
     (
@@ -159,6 +159,14 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             stale INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         );
+        """,
+    ),
+    (
+        2,
+        "add_events_source_agent",
+        """
+        ALTER TABLE events ADD COLUMN source_agent TEXT;
+        CREATE INDEX IF NOT EXISTS idx_events_agent_status ON events(project_id, worktree_id, source_agent, created_at);
         """,
     ),
 ]

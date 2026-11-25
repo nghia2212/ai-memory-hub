@@ -53,10 +53,12 @@ class IndexTriggerRequest(StrictModel):
 class EventCreateRequest(StrictModel):
     project_id: UUID
     worktree_id: UUID
-    task_id: str = Field(min_length=1, max_length=128)
+    task_id: str = Field(default="general", min_length=1, max_length=128)
+    source_agent: str | None = Field(default=None, max_length=64)
     kind: str = Field(min_length=1, max_length=64)
     payload: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=1, max_length=128)
+    timestamp: str | int | float | None = None
     approved: bool = False
 
 
