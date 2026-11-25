@@ -29,6 +29,8 @@ from .schemas import (
 )
 from .security import AuthPrincipal, authenticate_token, current_mcp_principal, extract_bearer_token, require_scope
 from .service import MemoryBridgeService
+from .v2_routes import create_v2_router
+from .v2_service import V2BridgeService
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -270,6 +272,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/metrics")
     async def get_metrics(_: AuthPrincipal = Depends(require_read)) -> dict[str, Any]:
         return service.get_metrics()
+
+    # Mount V2 Orchestrator & Session Analytics router
+    v2_service = V2BridgeService(db=db)
+    app.state.v2_service = v2_service
+    app.include_router(create_v2_router(v2_service, cfg))
 
     # Mount FastMCP Streamable HTTP app at /mcp
     app.mount("/mcp", mcp_app)

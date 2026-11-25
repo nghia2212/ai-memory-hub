@@ -153,6 +153,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button onclick="showTab('events', this)">Sự kiện & Kinh nghiệm</button>
     <button onclick="showTab('hermes', this)">Cấu hình Hermes</button>
     <button onclick="showTab('brain', this)">Bộ não điều phối</button>
+    <button onclick="showTab('plans', this)">Kế hoạch & Duyệt DAG</button>
+    <button onclick="showTab('sessions', this)">Phiên & Dự báo</button>
+    <button onclick="showTab('catalog', this)">Danh mục Model</button>
     <button onclick="showTab('backup', this)">Sao lưu & Khôi phục</button>
     <button onclick="showTab('metrics', this)">Thống kê & Chi phí</button>
   </nav>
@@ -319,6 +322,51 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
+    <!-- 7b. Kế hoạch & Duyệt DAG (V2) -->
+    <section id="tab-plans" class="panel">
+      <div class="card">
+        <h2>Kế hoạch Điều phối & Phê duyệt DAG (V2)</h2>
+        <div class="row-actions">
+          <select id="plans-proj" style="max-width:320px" onchange="loadPlans()"></select>
+          <button class="secondary" onclick="loadPlans()">Tải kế hoạch</button>
+        </div>
+        <div id="plans-list" style="margin-top:12px">Chọn dự án để xem danh sách kế hoạch và trạng thái duyệt.</div>
+      </div>
+    </section>
+
+    <!-- 7c. Phiên & Dự báo (V2 Session Analytics) -->
+    <section id="tab-sessions" class="panel">
+      <div class="card" style="margin-bottom:16px">
+        <h2>Lịch sử Phiên & Thống kê Cohort (V2)</h2>
+        <div class="grid">
+          <div><label>Dự án</label><select id="sess-proj" onchange="loadSessions()"></select></div>
+          <div><label>Độ phức tạp</label><select id="sess-comp" onchange="loadSessions()"><option value="">Tất cả</option><option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option></select></div>
+          <div><label>Kết quả</label><select id="sess-outcome" onchange="loadSessions()"><option value="">Tất cả</option><option value="completed">completed</option><option value="failed">failed</option><option value="checkpointed">checkpointed</option><option value="partial">partial</option></select></div>
+        </div>
+        <button class="secondary" onclick="loadSessions()">Làm mới phiên & hiệu chuẩn</button>
+        <div id="sessions-list" style="margin-top:12px"></div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Phân bố Cohort (P50 / P90 / Retry)</h3>
+          <div id="cohorts-view">Chưa có dữ liệu cohort.</div>
+        </div>
+        <div class="card">
+          <h3>Hiệu chuẩn Dự báo (MAE / WAPE / P90 Coverage)</h3>
+          <div id="calibration-view">Chưa có dữ liệu hiệu chuẩn.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7d. Danh mục Model & Đánh giá (V2) -->
+    <section id="tab-catalog" class="panel">
+      <div class="card">
+        <h2>Danh mục Model & Độ phù hợp (Catalog & Suitability Matrix)</h2>
+        <button class="secondary" onclick="loadCatalog()">Làm mới danh mục</button>
+        <div id="catalog-view" style="margin-top:12px"></div>
+      </div>
+    </section>
+
     <!-- 8. Sao lưu & Khôi phục -->
     <section id="tab-backup" class="panel">
       <div class="card">
@@ -452,7 +500,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const data = await apiFetch("/api/projects");
         projectsCache = data.items || [];
-        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj"];
+        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj"];
         for (const sid of selects) {
           const sel = document.getElementById(sid);
           const prev = sel.value;
@@ -720,11 +768,104 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } catch (e) { toast(e.message); }
     }
 
+    async function loadPlans() {
+      const pid = document.getElementById("plans-proj").value;
+      if (!pid) return;
+      try {
+        const data = await apiFetch(`/api/v2/plans?project_id=${encodeURIComponent(pid)}`);
+        const items = data.items || [];
+        if (!items.length) {
+          document.getElementById("plans-list").innerHTML = `<p style="color:var(--muted)">Chưa có kế hoạch V2 nào cho dự án này.</p>`;
+          return;
+        }
+        let html = "<table><tr><th>Mục tiêu</th><th>Trạng thái</th><th>Revision</th><th>Hành động</th></tr>";
+        for (const p of items) {
+          const detail = await apiFetch(`/api/v2/plans/${p.id}?project_id=${encodeURIComponent(pid)}`);
+          const curRev = (detail.revisions || [])[0];
+          const revHash = curRev ? curRev.revision_hash : "";
+          const approveBtn = p.status === "REVIEW_REQUIRED" && curRev
+            ? `<button class="primary" style="margin:0" onclick="planAction('${p.id}','approve','${curRev.id}','${revHash}')">Phê duyệt</button>`
+            : "";
+          const pauseBtn = p.status === "RUNNING" ? `<button class="secondary" onclick="planAction('${p.id}','pause')">Tạm dừng</button>` : "";
+          const resumeBtn = p.status === "PAUSED" ? `<button class="secondary" onclick="planAction('${p.id}','resume')">Tiếp tục</button>` : "";
+          const cancelBtn = !["COMPLETED","CANCELLED","REJECTED"].includes(p.status)
+            ? `<button class="secondary" onclick="planAction('${p.id}','cancel')">Hủy</button>` : "";
+          html += `<tr><td><strong>${p.objective}</strong><br/><small>${(detail.tasks||[]).length} tác vụ</small></td><td><span class="badge">${p.status}</span></td><td><code>${(p.current_revision_id||"").slice(0,8)}</code></td><td class="row-actions">${approveBtn}${pauseBtn}${resumeBtn}${cancelBtn}</td></tr>`;
+        }
+        html += "</table>";
+        document.getElementById("plans-list").innerHTML = html;
+      } catch (e) { toast(e.message); }
+    }
+
+    async function planAction(planId, action, revId, revHash) {
+      const pid = document.getElementById("plans-proj").value;
+      try {
+        const body = action === "approve"
+          ? { revision_id: revId, revision_hash: revHash, actor: "dashboard-admin", mode: "manual" }
+          : { project_id: pid, actor: "dashboard-admin" };
+        await apiFetch(`/api/v2/plans/${planId}/${action}?project_id=${encodeURIComponent(pid)}`, {
+          method: "POST",
+          body: JSON.stringify(body)
+        });
+        toast("Đã thực hiện: " + action);
+        await loadPlans();
+      } catch (e) { toast("Lỗi kế hoạch: " + e.message); }
+    }
+
+    async function loadSessions() {
+      const pid = document.getElementById("sess-proj").value;
+      if (!pid) return;
+      const comp = document.getElementById("sess-comp").value;
+      const out = document.getElementById("sess-outcome").value;
+      try {
+        const [sData, cData, calData] = await Promise.all([
+          apiFetch(`/api/v2/sessions?project_id=${encodeURIComponent(pid)}&complexity=${encodeURIComponent(comp)}&outcome=${encodeURIComponent(out)}`),
+          apiFetch(`/api/v2/analytics/cohorts?project_id=${encodeURIComponent(pid)}`),
+          apiFetch(`/api/v2/analytics/calibration?project_id=${encodeURIComponent(pid)}`)
+        ]);
+        const fmt = v => (v === null || v === undefined) ? "Không có dữ liệu" : v;
+        const sRows = (sData.items || []).map(s => `
+          <tr><td>${s.role}</td><td><code>${s.model_id}</code></td><td>${fmt(s.complexity)}</td><td><span class="badge">${s.status}</span></td>
+          <td>In: ${fmt(s.usage?.input_tokens)} / Out: ${fmt(s.usage?.output_tokens)}</td>
+          <td><button class="secondary" onclick="deleteSession('${s.id}')">Xóa (Retention)</button></td></tr>
+        `).join("");
+        document.getElementById("sessions-list").innerHTML = sRows
+          ? `<table><tr><th>Vai trò</th><th>Model</th><th>Độ phức tạp</th><th>Trạng thái</th><th>Token đo được</th><th>Hành động</th></tr>${sRows}</table>`
+          : `<p style="color:var(--muted)">Chưa có phiên nào.</p>`;
+        document.getElementById("cohorts-view").innerHTML = `<pre>${JSON.stringify(cData.items || [], null, 2)}</pre>`;
+        document.getElementById("calibration-view").innerHTML = `<pre>${JSON.stringify(calData, null, 2)}</pre>`;
+      } catch (e) { toast(e.message); }
+    }
+
+    async function deleteSession(sid) {
+      const pid = document.getElementById("sess-proj").value;
+      try {
+        await apiFetch(`/api/v2/sessions/${sid}?project_id=${encodeURIComponent(pid)}`, { method: "DELETE" });
+        toast("Đã xóa phiên theo chính sách lưu trữ");
+        await loadSessions();
+      } catch (e) { toast(e.message); }
+    }
+
+    async function loadCatalog() {
+      try {
+        const [cat, ev] = await Promise.all([apiFetch("/api/v2/catalog"), apiFetch("/api/v2/evaluations")]);
+        const rows = (cat.models || []).map(m => `
+          <tr><td>${m.provider}</td><td><code>${m.model_id}</code></td><td>${m.auth_mode}</td><td><span class="badge">${m.status}</span></td><td>${m.context_limit ?? "Không có dữ liệu"}</td></tr>
+        `).join("");
+        document.getElementById("catalog-view").innerHTML = rows
+          ? `<p>Snapshot: <code>${cat.snapshot_id}</code> | Stale: ${cat.is_stale}</p><table><tr><th>Provider</th><th>Model ID</th><th>Auth</th><th>Trạng thái</th><th>Context</th></tr>${rows}</table>`
+          : `<p class="badge warn">Chưa có snapshot danh mục model nào.</p>`;
+      } catch (e) { toast(e.message); }
+    }
+
     window.addEventListener("DOMContentLoaded", async () => {
       await checkSession();
       await loadOverview();
       await loadProjects();
       await loadBrainPanel();
+      await loadPlans();
+      await loadSessions();
+      await loadCatalog();
       await loadBackups();
       await loadMetrics();
     });
