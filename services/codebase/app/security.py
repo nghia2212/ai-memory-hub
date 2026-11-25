@@ -24,8 +24,71 @@ DEFAULT_EXCLUDES: tuple[str, ...] = (
     "**/node_modules/**",
     "dist/**",
     "**/dist/**",
+    "build/**",
+    "**/build/**",
+    ".cache/**",
+    "**/.cache/**",
+    ".tmp/**",
+    ".wrangler/**",
+    "__pycache__/**",
+    "**/__pycache__/**",
+    ".venv/**",
+    "**/.venv/**",
+    "test-results/**",
+    "test-results-*/**",
+    "outputs/**",
+    "art-in/**",
+    "art-src/**",
+    "trao-doi-anh/**",
+    "public/voice/**",
+    "public/audio/**",
+    "static/voice/**",
+    "static/audio/**",
     "**/credentials*",
     "credentials*",
+    # Binary 3D/media/archive/font assets (cataloged as metadata only, never text-indexed)
+    "*.glb",
+    "**/*.glb",
+    "*.gltf",
+    "**/*.gltf",
+    "*.blend",
+    "**/*.blend",
+    "*.png",
+    "**/*.png",
+    "*.jpg",
+    "**/*.jpg",
+    "*.jpeg",
+    "**/*.jpeg",
+    "*.webp",
+    "**/*.webp",
+    "*.gif",
+    "**/*.gif",
+    "*.ico",
+    "**/*.ico",
+    "*.mp3",
+    "**/*.mp3",
+    "*.ogg",
+    "**/*.ogg",
+    "*.wav",
+    "**/*.wav",
+    "*.mp4",
+    "**/*.mp4",
+    "*.webm",
+    "**/*.webm",
+    "*.zip",
+    "**/*.zip",
+    "*.woff",
+    "**/*.woff",
+    "*.woff2",
+    "**/*.woff2",
+    "*.ttf",
+    "**/*.ttf",
+    "*.otf",
+    "**/*.otf",
+    "*.pdf",
+    "**/*.pdf",
+    "*.log",
+    "**/*.log",
 )
 
 
@@ -151,9 +214,13 @@ def compute_tree_fingerprint(container_root: Path, extra_excludes: list[str] | N
         hasher.update(rel_f.encode("utf-8"))
         hasher.update(b"\x00")
         try:
-            with open(full_f, "rb") as fh:
-                while chunk := fh.read(65536):
-                    hasher.update(chunk)
+            st = full_f.stat()
+            if st.st_size > 2 * 1024 * 1024:
+                hasher.update(f"large:{st.st_size}:{st.st_mtime_ns}".encode("utf-8"))
+            else:
+                with open(full_f, "rb") as fh:
+                    while chunk := fh.read(65536):
+                        hasher.update(chunk)
         except OSError:
             hasher.update(b"<unreadable>")
         hasher.update(b"\x00")
