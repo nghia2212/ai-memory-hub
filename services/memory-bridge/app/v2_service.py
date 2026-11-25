@@ -11,6 +11,7 @@ from typing import Any
 from .db import DatabaseManager, reconcile_expired_job_leases, utc_now_iso
 from .errors import BridgeError
 from .security import redact_payload
+from .trace_usage import sync_usage_trace
 from .trace_lifecycle import plan_created, agent_claimed, agent_heartbeat, agent_finished
 from .v2_schemas import (
     BrainConfigUpdateRequest,
@@ -1784,6 +1785,7 @@ class V2BridgeService:
             ).fetchone()
             if not row:
                 raise BridgeError(404, "session_not_found", "Session not found for project")
+            conn.execute("DELETE FROM v22_execution_traces WHERE session_id=? AND step_type='session_usage'", (session_id,))
             conn.execute("DELETE FROM v2_sessions WHERE id = ?", (session_id,))
             self._audit(
                 conn,
@@ -1844,6 +1846,7 @@ class V2BridgeService:
                     now,
                 ),
             )
+            sync_usage_trace(conn, sid)
             return {"usage_event_id": uid, "deduplicated": False}
 
     def get_usage_summary(self, project_id: str) -> dict[str, Any]:
