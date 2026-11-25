@@ -81,3 +81,25 @@ def test_session_usage_projection(client):
     assert usage[0]["used_llm"] is None
     assert usage[0]["duration_ms"] is None
     assert not any(r["step_type"]=="llm_call" for r in rows)
+
+
+def test_trace_metrics_and_search(client):
+    pid,wid=_setup_project(client)
+    def add(name,start,end,**kw):
+        ident=str(uuid4())
+        event=dict(trace_id=ident,root_trace_id=ident,project_id=pid,worktree_id=wid,step_type="llm_call",
+                   step_name=name,actor_type="model",status="succeeded",used_llm=True,started_at=start,ended_at=end,
+                   metadata_json={"source":"fixture","measurement_kind":"measured"},**kw)
+        r=client.post("/v2/traces",json=event,headers=h("tok-runner"))
+        assert r.status_code==201,r.text
+        return ident
+    a=add("alpha","2026-01-01T00:00:00Z","2026-01-01T00:00:04Z",input_tokens=10)
+    b=add("beta","2026-01-01T00:00:02Z","2026-01-01T00:00:08Z",input_tokens=20)
+    r=client.get("/v2/traces",params={"project_id":pid,"limit":1,"sort":"duration_desc"},headers=h("tok-read")).json()
+    assert r["items"][0]["trace_id"]==b and r["next_offset"]==1
+    m=r["metrics"]
+    assert m["steps"]==2 and m["input_tokens"]==30 and m["cost_usd"] is None
+    assert m["observed_union_ms"]==8000 and m["summed_step_ms"]==10000
+    assert m["slowest_trace_id"]==b
+    r=client.get("/v2/traces",params={"project_id":pid,"search":"alpha"},headers=h("tok-read")).json()
+    assert r["total"]==1 and r["items"][0]["trace_id"]==a
