@@ -595,7 +595,10 @@
     const body = $("agent-host-health-body");
     if (!body) return;
     try {
-      const st = await apiFetch("/api/status");
+      const [st, workerInfo] = await Promise.all([
+        apiFetch("/api/status"),
+        apiFetch("/api/v321/worker/info").catch(() => null),
+      ]);
       body.replaceChildren();
       const row = el("div", null, "row-actions");
       row.style.flexWrap = "wrap";
@@ -604,15 +607,40 @@
       const cbOk = Boolean(st.codebase?.ready);
       const hbOk = Boolean(st.host_brain?.ready);
       row.append(
-        el("span", `Memory Bridge: ${brOk ? "Sẵn sàng (v" + (st.bridge?.schema_version || "?") + ")" : "Chưa sẵn sàng"}`, `badge ${brOk ? "ok" : "err"}`),
-        el("span", `Codebase: ${cbOk ? "Sẵn sàng" : "Chưa sẵn sàng"}`, `badge ${cbOk ? "ok" : "err"}`),
-        el("span", `Host Brain Agent: ${st.host_brain?.label || (hbOk ? "Đang hoạt động" : "Chưa kết nối")}`, `badge ${hbOk ? "ok" : "err"}`)
+        el("span", `Memory Bridge (Docker): ${brOk ? "Sẵn sàng (v" + (st.bridge?.schema_version || "?") + ")" : "Chưa sẵn sàng"}`, `badge ${brOk ? "ok" : "err"}`),
+        el("span", `Codebase (Docker): ${cbOk ? "Sẵn sàng" : "Chưa sẵn sàng"}`, `badge ${cbOk ? "ok" : "err"}`),
+        el("span", `Windows Native Worker: ${st.host_brain?.label || (hbOk ? "Đang hoạt động" : "Chưa kết nối")}`, `badge ${hbOk ? "ok" : "err"}`)
       );
       if (st.host_brain?.checked_at) {
         row.append(el("small", `Kiểm tra lúc: ${vnTime(st.host_brain.checked_at)}`, "trace-muted"));
       }
       body.append(row);
       body.append(el("p", st.host_brain?.detail || "", "trace-muted"));
+
+      if (workerInfo && workerInfo.ok) {
+        const metaRow = el("div", null, "row-actions");
+        metaRow.style.flexWrap = "wrap";
+        metaRow.style.gap = "6px";
+        metaRow.style.margin = "6px 0";
+        const profiles = Object.keys(workerInfo.permission_profiles || {}).join(", ");
+        metaRow.append(
+          el("span", `Runtime: ${workerInfo.runtime || "windows_native"} (PID ${workerInfo.pid || "?"})`, "badge ok"),
+          el("span", `Kiến trúc: Hybrid Docker Hub + Native Worker`, "badge ok"),
+          el("span", `Sandbox: ${workerInfo.sandbox_enforced ? "Bật" : "Tắt"} · Workspace Allowlist: ${workerInfo.workspace_allowlist_enforced ? "Bật" : "Tắt"}`, "badge ok"),
+          el("span", `Quyền thực thi: ${profiles || "read_only"}`, "badge")
+        );
+        body.append(metaRow);
+
+        const toolsRow = el("div", null, "row-actions");
+        toolsRow.style.flexWrap = "wrap";
+        toolsRow.style.gap = "6px";
+        toolsRow.style.marginBottom = "8px";
+        toolsRow.append(el("small", "Công cụ Windows Host:", "trace-muted"));
+        for (const [tName, tInfo] of Object.entries(workerInfo.tools || {})) {
+          toolsRow.append(el("span", `${tName}: ${tInfo.available ? "Sẵn sàng" : "Không có"}`, `badge ${tInfo.available ? "ok" : "warn"}`));
+        }
+        body.append(toolsRow);
+      }
 
       const actions = el("div", null, "row-actions");
       actions.style.flexWrap = "wrap";
@@ -627,7 +655,7 @@
       bHost.style.marginTop = "0";
       bHost.addEventListener("click", () => { navigator.clipboard?.writeText(cmdHost); toast("Đã sao chép lệnh start-host-brain-agent.ps1"); });
       actions.append(bAll, bHost);
-      actions.append(el("small", "Dashboard chạy trong Docker nên không tự chạy lệnh shell trên Windows host (chạy lệnh trên tại PowerShell Windows).", "trace-muted"));
+      actions.append(el("small", "Backend/DB chạy trong Docker; Agent CLI, Git và build/test chạy native trên Windows Worker có sandbox & allowlist.", "trace-muted"));
       body.append(actions);
     } catch (e) {
       body.textContent = "Lỗi kiểm tra trạng thái hệ thống: " + e.message;

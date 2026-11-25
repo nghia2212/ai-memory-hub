@@ -23,7 +23,11 @@
   const actions=el("div",null,"row-actions");target.append(actions);actions.append(button("Bản đồ thực thi",()=>window.openExecutionMap(pid,id)));
   if(d.status==="REVIEW_REQUIRED"&&rev&&d.editable_tasks?.length)actions.append(button("Sửa nhiệm vụ / model",()=>editRevision(d,rev,target)));
   if(d.status==="REVIEW_REQUIRED"&&rev)actions.append(button("Phê duyệt revision",async()=>{await planAction(id,"approve",rev.id,rev.revision_hash);}));
-  if(d.status==="APPROVED"||d.status==="RUNNING")actions.append(button("Chạy tác vụ sẵn sàng",async()=>{if(confirm("Khởi chạy tác vụ đã duyệt? Có thể sử dụng hạn mức thuê bao."))await dispatchPlan(id,d.worktree_id);}));
+  if(d.status==="APPROVED"||d.status==="RUNNING"){
+    const permSel=el("select");permSel.id="plan-permission-profile";permSel.title="Quyền thực thi trên Windows Native Worker (vẫn giữ sandbox & workspace allowlist)";
+    [["read_only","Chỉ đọc (Read-only · mặc định)"],["workspace_write","Ghi worktree + Build/Test (Sandbox)"],["workspace_write_git","Ghi worktree + Git/GitHub (Sandbox)"]].forEach(([v,lbl])=>{const o=el("option",lbl);o.value=v;permSel.append(o);});
+    actions.append(permSel,button("Chạy tác vụ sẵn sàng",async()=>{const prof=permSel.value||"read_only";if(confirm(`Khởi chạy tác vụ đã duyệt với quyền [${prof}] trên Windows Native Worker? Có thể sử dụng hạn mức thuê bao.`))await dispatchPlan(id,d.worktree_id,prof);}));
+  }
   if(["APPROVED","RUNNING"].includes(d.status))actions.append(button("Tạm dừng cấp job mới",()=>planAction(id,"pause")));
   if(d.status==="PAUSED"&&!tasks.some(t=>t.state==="blocked"))actions.append(button("Tiếp tục",()=>planAction(id,"resume")));
   if(!["COMPLETED","CANCELLED","REJECTED","FAILED"].includes(d.status))actions.append(button("Hủy kế hoạch",async()=>{if(confirm("Hủy kế hoạch? Kiểm tra tiến trình CLI trước khi giao lại công việc."))await planAction(id,"cancel");}));

@@ -1604,15 +1604,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } catch (e) { toast("Lỗi tạo kế hoạch: " + e.message); }
     }
 
-    async function dispatchPlan(planId, worktreeId) {
+    async function dispatchPlan(planId, worktreeId, permissionProfile = "read_only") {
       const pid = document.getElementById("plans-proj").value;
       const outEl = document.getElementById("plan-dispatch-output");
       outEl.style.display = "block";
-      outEl.textContent = "Đang khởi chạy Agent trên Host Brain Agent...";
+      outEl.textContent = `Đang khởi chạy Agent trên Windows Native Worker (${permissionProfile})...`;
       try {
         const res = await apiFetch(`/api/v2/plans/${planId}/dispatch?project_id=${encodeURIComponent(pid)}`, {
           method: "POST",
-          body: JSON.stringify({ worktree_id: worktreeId })
+          body: JSON.stringify({ worktree_id: worktreeId, permission_profile: permissionProfile })
         });
         outEl.textContent = res.message || "Đã nhận phản hồi từ runner.";
         toast(res.ok ? "Agent thực thi hoàn tất!" : "Agent thực thi thất bại");

@@ -797,6 +797,296 @@ def probe_model(
     }
 
 
+PERMISSION_PROFILES: dict[str, dict[str, Any]] = {
+    "read_only": {
+        "label": "Chỉ đọc (Read-only)",
+        "description": "Chỉ phân tích mã nguồn, không sửa tệp, không chạy lệnh ghi hoặc mạng.",
+        "allows_write": False,
+        "allows_git_network": False,
+        "sandbox_enforced": True,
+    },
+    "workspace_write": {
+        "label": "Ghi worktree + Build/Test (Sandbox)",
+        "description": "Cho phép sửa tệp và chạy build/test bên trong đúng worktree đã đăng ký; vẫn giữ sandbox, không mở quyền toàn máy.",
+        "allows_write": True,
+        "allows_git_network": False,
+        "sandbox_enforced": True,
+    },
+    "workspace_write_git": {
+        "label": "Ghi worktree + Git/GitHub (Sandbox)",
+        "description": "Cho phép sửa tệp, build/test và thao tác Git/GitHub an toàn trong worktree đã đăng ký; cấm push/merge main, cấm force-push, cấm deploy prod.",
+        "allows_write": True,
+        "allows_git_network": True,
+        "sandbox_enforced": True,
+    },
+}
+
+_ALLOWED_WORKSPACE_OPS: tuple[str, ...] = (
+    "git_status",
+    "git_ls_remote",
+    "git_fetch",
+    "git_diff_stat",
+    "typecheck",
+    "npm_build",
+    "npm_test",
+)
+
+_SECRET_REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]{8,}"), r"\1[REDACTED]"),
+    (re.compile(r"\b(ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|sk-[A-Za-z0-9_\-]{12,})\b"), "[REDACTED_TOKEN]"),
+    (re.compile(r"(https?://)([^:@/\s]+):([^@/\s]+)@"), r"\1[REDACTED]:[REDACTED]@"),
+)
+
+
+def _normalize_permission_profile(profile: str | None) -> str:
+    val = (profile or "read_only").strip().lower()
+    return val if val in PERMISSION_PROFILES else "read_only"
+
+
+def _redact_worker_output(text: str) -> str:
+    out = text or ""
+    for pat, repl in _SECRET_REDACT_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def _norm_abs_path(raw: str) -> str:
+    p = str(Path(raw).resolve())
+    return p.lower() if os.name == "nt" else p
+
+
+def _validate_allowed_workspace(
+    env: dict[str, str],
+    *,
+    project_id: str,
+    worktree_id: str | None,
+    worktree_path: str | None,
+) -> tuple[bool, str, str]:
+    """Enforce workspace allowlist against Memory Bridge registered worktrees."""
+    if not project_id:
+        return False, "", "workspace_not_allowed: thiếu project_id để xác thực worktree."
+    if worktree_path and ".." in Path(worktree_path).parts:
+        return False, "", "workspace_not_allowed: đường dẫn chứa path traversal (..)."
+
+    token_key = "BRIDGE_READ_TOKEN" if env.get("BRIDGE_READ_TOKEN") else "BRIDGE_ADMIN_TOKEN"
+    code, resp = _bridge_request(env, "GET", f"/v1/projects/{project_id}/worktrees", token_key=token_key, timeout=10)
+    if code != 200:
+        return False, "", f"workspace_not_allowed: không xác thực được danh sách worktree từ Memory Bridge (HTTP {code})."
+
+    items = resp.get("items") or resp.get("worktrees") or []
+    matched_root = ""
+    target_norm = _norm_abs_path(worktree_path) if worktree_path else ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_wt_id = str(item.get("worktree_id") or item.get("id") or "")
+        item_root = str(item.get("canonical_root") or item.get("path") or "").strip()
+        if not item_root:
+            continue
+        if worktree_id and item_wt_id != worktree_id:
+            continue
+        if target_norm:
+            if _norm_abs_path(item_root) == target_norm:
+                matched_root = item_root
+                break
+        elif worktree_id and item_wt_id == worktree_id:
+            matched_root = item_root
+            break
+
+    if not matched_root:
+        return False, "", "workspace_not_allowed: đường dẫn worktree không nằm trong danh sách worktree đã đăng ký của dự án."
+    resolved = Path(matched_root).resolve()
+    if not resolved.is_dir():
+        return False, "", f"workspace_not_allowed: thư mục worktree không tồn tại trên Windows host ({resolved})."
+    return True, str(resolved), ""
+
+
+def _build_task_prompt(objective: str, permission_profile: str, worktree_path: str) -> str:
+    prof = _normalize_permission_profile(permission_profile)
+    if prof == "read_only":
+        return (
+            f"[AI Memory Hub V2 Approved Task]\n"
+            f"Objective: {objective}\n"
+            f"Constraint: Read-only analysis only. Reply concisely in Vietnamese (<= 4 bullet points)."
+        )
+    if prof == "workspace_write":
+        return (
+            f"[AI Memory Hub V2 Approved Task — Windows Native Worker]\n"
+            f"Workspace: {worktree_path}\n"
+            f"Permission Profile: workspace_write (scoped to registered worktree only; sandbox enforced).\n"
+            f"Allowed: inspect files, edit code, and run local build/test inside this worktree.\n"
+            f"Forbidden: never touch paths outside this worktree, never merge/push to main, never deploy production, never expose credentials.\n"
+            f"Objective: {objective}\n"
+            f"Reply in Vietnamese with concrete evidence of actions taken."
+        )
+    return (
+        f"[AI Memory Hub V2 Approved Task — Windows Native Worker]\n"
+        f"Workspace: {worktree_path}\n"
+        f"Permission Profile: workspace_write_git (scoped to registered worktree only; sandbox enforced).\n"
+        f"Allowed: inspect/edit files, run local build/test, and run safe Git/GitHub operations (status, fetch, ls-remote, diff, feature branch).\n"
+        f"Forbidden: never merge or push to main, never force-push, never reset --hard, never deploy production, never expose credentials.\n"
+        f"Objective: {objective}\n"
+        f"Reply in Vietnamese with concrete evidence of actions taken."
+    )
+
+
+def _build_cli_command(
+    provider: str,
+    model_id: str,
+    prompt: str,
+    permission_profile: str,
+    *,
+    effort: str | None = None,
+    external_session_id: str | None = None,
+) -> tuple[list[str], str | None]:
+    """Build officially supported CLI command respecting permission_profile without disabling sandbox."""
+    cli = (provider or "").strip().lower()
+    prof = _normalize_permission_profile(permission_profile)
+    if cli == "claude":
+        if prof == "read_only":
+            return ["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id], prompt[:16000]
+        return ["claude", "-p", "--permission-mode", "acceptEdits", "--output-format", "json", "--model", model_id], prompt[:16000]
+    if cli == "codex":
+        cmd = ["codex", "exec", "--json"]
+        if prof == "read_only":
+            cmd.extend(["--sandbox", "read-only"])
+        elif prof == "workspace_write":
+            cmd.extend(["--sandbox", "workspace-write"])
+        else:  # workspace_write_git
+            cmd.extend(["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true"])
+        cmd.extend(["--model", model_id])
+        eff = (effort or "").strip().lower()
+        if eff in ("low", "medium", "high", "xhigh", "max"):
+            cmd.extend(["-c", f'model_reasoning_effort="{eff}"'])
+        cmd.append("-")
+        return cmd, prompt[:16000]
+    if cli == "agy":
+        mode_flag = "plan" if prof == "read_only" else "accept-edits"
+        cmd = ["agy", "--mode", mode_flag, "--model", model_id, "--output-format", "json"]
+        if external_session_id and re.match(r"^[A-Za-z0-9._:-]{4,120}$", external_session_id):
+            cmd.extend(["--conversation", external_session_id])
+        if prof == "read_only":
+            safe_prompt = (prompt + "\n[Lưu ý runtime: chế độ chỉ đọc không tương tác, không chạy lệnh Bash/shell; chỉ đọc tệp hoặc trả lời trực tiếp bằng văn bản tiếng Việt.]")[:14000]
+        else:
+            safe_prompt = prompt[:14000]
+        cmd.extend(["--print", safe_prompt])
+        return cmd, None
+    return [], None
+
+
+def get_worker_info(env: dict[str, str]) -> dict[str, Any]:
+    """Report actual Windows Native Execution Worker capabilities, tools & security guardrails."""
+    tool_names = ("git", "gh", "node", "npm", "python", "agy", "codex", "claude")
+    tools: dict[str, dict[str, Any]] = {}
+    for name in tool_names:
+        found = shutil.which(name)
+        tools[name] = {
+            "available": bool(found),
+            "executable": Path(found).name if found else None,
+        }
+    return {
+        "ok": True,
+        "runtime": "windows_native" if os.name == "nt" else "host_native",
+        "execution_architecture": "hybrid_docker_hub_plus_windows_worker",
+        "execution_mode": "native_host_worker",
+        "os": sys.platform,
+        "pid": os.getpid(),
+        "python_version": sys.version.split()[0],
+        "sandbox_enforced": True,
+        "workspace_allowlist_enforced": True,
+        "permission_profiles": PERMISSION_PROFILES,
+        "allowed_workspace_ops": list(_ALLOWED_WORKSPACE_OPS),
+        "tools": tools,
+        "checked_at": utc_now_iso(),
+    }
+
+
+def run_workspace_op(
+    env: dict[str, str],
+    *,
+    project_id: str,
+    worktree_id: str | None,
+    action: str,
+    worktree_path: str | None = None,
+    remote: str = "origin",
+    branch: str | None = None,
+    timeout_sec: int = 90,
+) -> dict[str, Any]:
+    """Execute allowlisted native Git/build/test operations inside a registered worktree on Windows host."""
+    act = (action or "").strip().lower()
+    if act not in _ALLOWED_WORKSPACE_OPS:
+        return {
+            "ok": False,
+            "status_code": 403,
+            "error_code": "action_not_allowed",
+            "message": f"Thao tác '{act}' không nằm trong danh sách cho phép ({', '.join(_ALLOWED_WORKSPACE_OPS)}).",
+        }
+
+    ok_ws, resolved_cwd, ws_err = _validate_allowed_workspace(
+        env, project_id=project_id, worktree_id=worktree_id, worktree_path=worktree_path
+    )
+    if not ok_ws:
+        return {
+            "ok": False,
+            "status_code": 403,
+            "error_code": "workspace_not_allowed",
+            "message": ws_err,
+        }
+
+    safe_remote = (remote or "origin").strip()
+    if not re.match(r"^[A-Za-z0-9._-]{1,64}$", safe_remote):
+        return {"ok": False, "status_code": 422, "error_code": "invalid_remote", "message": "Tên remote Git không hợp lệ."}
+    safe_branch = (branch or "").strip()
+    if safe_branch and not re.match(r"^[A-Za-z0-9._/\-]{1,120}$", safe_branch):
+        return {"ok": False, "status_code": 422, "error_code": "invalid_branch", "message": "Tên branch Git không hợp lệ."}
+
+    if act == "git_status":
+        cmd = ["git", "status", "--short", "--branch"]
+    elif act == "git_ls_remote":
+        cmd = ["git", "ls-remote", "--heads", safe_remote]
+    elif act == "git_fetch":
+        cmd = ["git", "fetch", safe_remote] + ([safe_branch] if safe_branch else [])
+    elif act == "git_diff_stat":
+        cmd = ["git", "diff", "--stat"]
+    elif act == "typecheck":
+        pkg_path = Path(resolved_cwd) / "package.json"
+        has_tc = False
+        if pkg_path.is_file():
+            try:
+                pkg = json.loads(pkg_path.read_text(encoding="utf-8", errors="replace"))
+                has_tc = "typecheck" in (pkg.get("scripts") or {})
+            except Exception:
+                has_tc = False
+        cmd = ["npm", "run", "typecheck"] if has_tc else ["npx", "tsc", "--noEmit"]
+    elif act == "npm_build":
+        cmd = ["npm", "run", "build"]
+    else:  # npm_test
+        cmd = ["npm", "test"]
+
+    bounded_timeout = max(10, min(int(timeout_sec or 90), 240))
+    t0 = time.perf_counter()
+    rc, out, err = _run_cmd(cmd, cwd=resolved_cwd, timeout=bounded_timeout, managed=True)
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+
+    clean_out = _redact_worker_output(out)[:8000]
+    clean_err = _redact_worker_output(err)[:4000]
+
+    return {
+        "ok": rc == 0,
+        "status_code": 200 if rc == 0 else 422,
+        "runtime": "windows_native" if os.name == "nt" else "host_native",
+        "action": act,
+        "project_id": project_id,
+        "worktree_id": worktree_id,
+        "worktree_path": resolved_cwd,
+        "exit_code": rc,
+        "duration_ms": duration_ms,
+        "stdout": clean_out,
+        "stderr": clean_err,
+        "checked_at": utc_now_iso(),
+    }
+
+
 def execute_approved_plan(
     env: dict[str, str],
     *,
@@ -804,8 +1094,10 @@ def execute_approved_plan(
     worktree_id: str,
     plan_id: str,
     worktree_path: str | None = None,
+    permission_profile: str | None = None,
 ) -> dict[str, Any]:
     """Claim approved job from Memory Bridge, execute assigned CLI non-interactively, and report completion."""
+    prof = _normalize_permission_profile(permission_profile)
     runner_id = f"host-brain-agent-{os.getpid()}"
     code, claim = _bridge_request(
         env,
@@ -836,14 +1128,10 @@ def execute_approved_plan(
     effort = claim.get("effort")
     auth_mode = claim.get("auth_mode") or "subscription_cli"
     objective = (claim.get("context_pack") or {}).get("objective") or "Summarize task"
-    effective_wt_path = claim.get("worktree_path")
+    effective_wt_path = claim.get("worktree_path") or worktree_path or ""
 
     t0 = time.perf_counter()
-    prompt = (
-        f"[AI Memory Hub V2 Approved Task]\n"
-        f"Objective: {objective}\n"
-        f"Constraint: Read-only analysis only. Reply concisely in Vietnamese (<= 4 bullet points)."
-    )
+    prompt = _build_task_prompt(objective, prof, effective_wt_path)
     stop = threading.Event()
     heartbeat = {"project_id": project_id, "lease_id": lease_id, "runner_id": runner_id, "lease_seconds": 300}
 
@@ -866,24 +1154,25 @@ def execute_approved_plan(
     trace_started = datetime.now(timezone.utc)
     invoked = False
     local = False
+    exec_timeout = 90 if prof == "read_only" else 180
     try:
-        cwd = effective_wt_path
-        if not cwd or not Path(cwd).is_dir():
-            rc, out, err = 1, "", "Registered worktree unavailable"
+        ok_ws, validated_cwd, ws_err = _validate_allowed_workspace(
+            env, project_id=project_id, worktree_id=worktree_id, worktree_path=effective_wt_path
+        )
+        cwd = validated_cwd if ok_ws else effective_wt_path
+        if not ok_ws and not (cwd and Path(cwd).is_dir()):
+            rc, out, err = 1, "", ws_err or "Registered worktree unavailable"
+        elif prof != "read_only" and not ok_ws:
+            rc, out, err = 1, "", ws_err
         elif provider == "local" or model_id == "deterministic-rules":
             invoked = local = True
             rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
         elif auth_mode != "subscription_cli":
             rc, out, err = 1, "", "Non-subscription dispatch disabled"
-        elif provider == "claude":
+        elif provider in ("claude", "codex", "agy"):
             invoked = True
-            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id], cwd=cwd, timeout=90, managed=True, stdin_text=prompt)
-        elif provider == "codex":
-            invoked = True
-            rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, "-"], cwd=cwd, timeout=90, managed=True, stdin_text=prompt)
-        elif provider == "agy" and auth_mode == "subscription_cli":
-            invoked = True
-            rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--output-format", "json", "--print", prompt], cwd=cwd, timeout=90, managed=True)
+            cmd, stdin_text = _build_cli_command(provider, model_id, prompt, prof, effort=effort)
+            rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=exec_timeout, managed=True, stdin_text=stdin_text)
         else:
             rc, out, err = 1, "", "Unsupported approved CLI adapter"
     finally:
@@ -963,6 +1252,9 @@ def execute_approved_plan(
 
     return {
         "ok": succeeded and cc == 200,
+        "runtime": "windows_native" if os.name == "nt" else "host_native",
+        "execution_mode": "hybrid_native_worker",
+        "permission_profile": prof,
         "job_id": job_id,
         "session_id": session_id,
         "provider": provider,
@@ -1024,10 +1316,12 @@ def run_subscription_chat(
     external_session_id: str | None = None,
     thinking_level: str | None = None,
     timeout_sec: int = 110,
+    permission_profile: str | None = None,
 ) -> dict[str, Any]:
-    """P19A.1: Direct non-interactive subscription CLI execution via officially supported flags (read-only)."""
+    """P19A.1: Direct non-interactive subscription CLI execution via officially supported flags."""
     cli = (cli_family or "").strip().lower()
     mid = (model_id or "").strip()
+    prof = _normalize_permission_profile(permission_profile)
     if cli not in ("agy", "claude", "codex"):
         return {
             "ok": False,
@@ -1041,25 +1335,15 @@ def run_subscription_chat(
     bounded_timeout = max(20, min(int(timeout_sec or 110), 180))
     t0 = time.perf_counter()
 
-    if cli == "agy":
-        # Keep Windows CLI argument length safely under CreateProcess limit
-        # Note: in non-interactive --mode plan, shell/Bash commands are denied; instruct agent to use read-only file tools only.
-        safe_prompt = (prompt + "\n[Lưu ý runtime: chế độ chỉ đọc không tương tác, không chạy lệnh Bash/shell; chỉ đọc tệp hoặc trả lời trực tiếp bằng văn bản tiếng Việt.]")[:14000]
-        cmd = ["agy", "--mode", "plan", "--model", mid, "--output-format", "json"]
-        if external_session_id and re.match(r"^[A-Za-z0-9._:-]{4,120}$", external_session_id):
-            cmd.extend(["--conversation", external_session_id])
-        cmd.extend(["--print", safe_prompt])
-        rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True)
-    elif cli == "claude":
-        cmd = ["claude", "-p", "--tools", "", "--output-format", "json", "--model", mid]
-        rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True, stdin_text=prompt[:16000])
-    else:  # codex
-        cmd = ["codex", "exec", "--json", "--sandbox", "read-only", "--model", mid]
-        eff = (thinking_level or "").strip().lower()
-        if eff in ("low", "medium", "high", "xhigh", "max"):
-            cmd.extend(["-c", f'model_reasoning_effort="{eff}"'])
-        cmd.append("-")
-        rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True, stdin_text=prompt[:16000])
+    cmd, stdin_text = _build_cli_command(
+        cli,
+        mid,
+        prompt,
+        prof,
+        effort=thinking_level,
+        external_session_id=external_session_id,
+    )
+    rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True, stdin_text=stdin_text)
 
     duration_ms = int((time.perf_counter() - t0) * 1000)
     quota_hit = bool(re.search(r"(?i)(?:quota exceeded|rate.limit exceeded|resource.exhausted|quota will reset|usage limit)", (err or out)[:2000]))
@@ -1166,6 +1450,9 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
             if self.path == "/host/quotas":
                 self._send(200, discover_host_quotas())
                 return
+            if self.path == "/host/worker-info":
+                self._send(200, get_worker_info(env))
+                return
             self._send(404, {"error": {"code": "not_found", "message": "Not found"}})
 
         def do_POST(self) -> None:
@@ -1209,8 +1496,23 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
                     worktree_id=str(body.get("worktree_id") or ""),
                     plan_id=str(body.get("plan_id") or ""),
                     worktree_path=body.get("worktree_path"),
+                    permission_profile=body.get("permission_profile"),
                 )
                 self._send(200 if res["ok"] else 409, res)
+                return
+
+            if self.path == "/host/workspace-ops":
+                res = run_workspace_op(
+                    env,
+                    project_id=str(body.get("project_id") or ""),
+                    worktree_id=body.get("worktree_id"),
+                    action=str(body.get("action") or ""),
+                    worktree_path=body.get("worktree_path"),
+                    remote=str(body.get("remote") or "origin"),
+                    branch=body.get("branch"),
+                    timeout_sec=int(body.get("timeout_sec") or 90),
+                )
+                self._send(int(res.get("status_code") or (200 if res["ok"] else 422)), res)
                 return
 
             if self.path == "/host/subscription-chat":
@@ -1224,6 +1526,7 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
                     external_session_id=body.get("external_session_id"),
                     thinking_level=body.get("thinking_level"),
                     timeout_sec=int(body.get("timeout_sec") or 110),
+                    permission_profile=body.get("permission_profile"),
                 )
                 self._send(200 if res["ok"] else 422, res)
                 return

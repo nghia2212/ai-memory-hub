@@ -816,6 +816,7 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v2_plan_dispatch(plan_id: str, project_id: str, request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
         body = await request.json() if await request.body() else {}
+        perm_profile = str(body.get("permission_profile") or "read_only").strip().lower()
         return await _proxy_host_brain(
             "POST",
             "/host/execute-plan",
@@ -823,8 +824,9 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 "project_id": project_id,
                 "worktree_id": body.get("worktree_id", ""),
                 "plan_id": plan_id,
+                "permission_profile": perm_profile,
             },
-            timeout=105.0,
+            timeout=105.0 if perm_profile == "read_only" else 195.0,
         )
 
     @app.get("/api/v2/evaluations")
@@ -1465,6 +1467,16 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v321_sync_quotas(request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
         return await _proxy_host_brain("POST", "/host/sync-quotas", json_body={}, timeout=20.0)
+
+    @app.get("/api/v321/worker/info")
+    async def api_v321_worker_info(request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_host_brain("GET", "/host/worker-info", timeout=10.0)
+
+    @app.post("/api/v321/worker/workspace-ops")
+    async def api_v321_worker_workspace_ops(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_host_brain("POST", "/host/workspace-ops", json_body=await request.json(), timeout=120.0)
 
     # --- V3.2.1 P16B Persistent Task & Auto Recovery Proxy Routes (all auth/CSRF enforced) ---
     @app.get("/api/v321/projects/{project_id}/recovery-policy")
