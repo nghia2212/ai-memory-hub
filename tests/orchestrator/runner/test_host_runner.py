@@ -137,11 +137,11 @@ class TestHostRunner(unittest.TestCase):
                 subprocess_runner=lambda cmd, cwd, t: (0, codex_jsonl, ""),
             ).run_once()
             self.assertEqual(r2["status"], "succeeded")
-            self.assertEqual(b2.usage[0]["input_tokens"], 120)
-            self.assertEqual(b2.usage[0]["cache_read_tokens"], 30)
-            self.assertEqual(b2.completions[0]["upstream_session_id"], "th-1")
+            self.assertEqual(b2.usage[0]["usage"]["input_tokens"], 120)
+            self.assertEqual(b2.usage[0]["usage"]["cache_read_tokens"], 30)
+            self.assertEqual(b2.completions[0]["outcome"], "succeeded")
 
-            # 3. Timeout triggers checkpoint + failed
+            # 3. Timeout triggers checkpoint (which releases lease on Bridge)
             b3 = FakeRunnerBridge(job_ok)
 
             def raise_timeout(cmd: list[str], cwd: str, t: float) -> tuple[int, str, str]:
@@ -154,7 +154,7 @@ class TestHostRunner(unittest.TestCase):
             ).run_once()
             self.assertEqual(r3["reason"], "timeout")
             self.assertEqual(len(b3.checkpoints), 1)
-            self.assertEqual(b3.completions[0]["error_code"], "timeout")
+            self.assertIn("timed out", b3.checkpoints[0]["handoff_summary"].lower())
 
 
 if __name__ == "__main__":

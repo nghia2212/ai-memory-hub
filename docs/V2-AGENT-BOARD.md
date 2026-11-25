@@ -14,9 +14,9 @@
 
 | Agent | Nhánh làm việc (tạo từ `lead/v2-orchestrator`) | Phạm vi sở hữu | Trạng thái | Tài liệu nhiệm vụ |
 | :--- | :--- | :--- | :--- | :--- |
-| **Agent A** | `agent/v2-model-registry` | `services/orchestrator/catalog/**`, `services/orchestrator/routing/**`, `services/orchestrator/forecast/**`, `tests/orchestrator/catalog/**`, `tests/orchestrator/forecast/**`, `docs/evidence/v2-agent-a.md` | **ACTIVE / READY** | `docs/tasks/V2-AGENT-A.md` |
-| **Agent B** | `agent/v2-observability` | `services/memory-bridge/**`, `services/dashboard/**`, `tests/bridge/**`, `tests/dashboard/**`, `docs/evidence/v2-agent-b.md` | **ACTIVE / READY** | `docs/tasks/V2-AGENT-B.md` |
-| **Agent C** | `agent/v2-orchestration` | `services/orchestrator/planner/**`, `services/orchestrator/dispatch/**`, `integrations/**`, `scripts/runner/**`, `tests/orchestrator/runner/**`, `docs/evidence/v2-agent-c.md` | **ACTIVE / READY** | `docs/tasks/V2-AGENT-C.md` |
+| **Agent A** | `agent/v2-model-registry` | `services/orchestrator/catalog/**`, `services/orchestrator/routing/**`, `services/orchestrator/forecast/**`, `tests/orchestrator/catalog/**`, `tests/orchestrator/forecast/**`, `docs/evidence/v2-agent-a.md` | **MERGED (`e82b2e3`)** | `docs/tasks/V2-AGENT-A.md` |
+| **Agent B** | `agent/v2-observability` | `services/memory-bridge/**`, `services/dashboard/**`, `tests/bridge/**`, `tests/dashboard/**`, `docs/evidence/v2-agent-b.md` | **MERGED (`59a8f40`)** | `docs/tasks/V2-AGENT-B.md` |
+| **Agent C** | `agent/v2-orchestration` | `services/orchestrator/planner/**`, `services/orchestrator/dispatch/**`, `integrations/**`, `scripts/runner/**`, `tests/orchestrator/runner/**`, `docs/evidence/v2-agent-c.md` | **MERGED (`9db2d98`)** | `docs/tasks/V2-AGENT-C.md` |
 
 ## Quy tắc bắt buộc cho cả 3 Agent
 

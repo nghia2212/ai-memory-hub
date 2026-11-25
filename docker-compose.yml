@@ -28,7 +28,9 @@ services:
       timeout: 3s
       retries: 3
   memory-bridge:
-    build: ./services/memory-bridge
+    build:
+      context: .
+      dockerfile: services/memory-bridge/Dockerfile
     mem_limit: 512m
     restart: unless-stopped
     read_only: true
@@ -47,6 +49,8 @@ services:
       BRIDGE_WRITE_TOKENS: "${BRIDGE_WRITE_TOKEN:-}"
       BRIDGE_ADMIN_TOKENS: "${BRIDGE_ADMIN_TOKEN:-}"
       BRIDGE_WORKER_TOKENS: "${BRIDGE_WORKER_TOKEN:-}"
+      BRIDGE_PLANNER_TOKENS: "${BRIDGE_PLANNER_TOKEN:-}"
+      BRIDGE_RUNNER_TOKENS: "${BRIDGE_RUNNER_TOKEN:-}"
     networks: [core]
     ports:
       - "127.0.0.1:${BRIDGE_PORT:-8082}:8082"
