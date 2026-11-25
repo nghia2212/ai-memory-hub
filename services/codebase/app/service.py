@@ -13,6 +13,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from .cbm_client import CBMBackend, CBMClientError
+from .trace_ops import scoped, emit
+from datetime import datetime, timezone
 from .config import Settings
 from .explorer import directory_page, safe_entry, source_page, trace_edges
 from .models import (
@@ -149,6 +151,7 @@ class CodebaseService:
                 ) from exc
         return entry
 
+    @scoped
     async def explore(self, project_id, worktree_id, view, path, symbol, offset, line, depth):
         entry = await self._require_worktree(project_id, worktree_id)
         root = Path(entry.container_root)
@@ -161,7 +164,14 @@ class CodebaseService:
         if view == "index":
             return {**info, "active_job": self._store.get_active_job(str(project_id), str(worktree_id))}
         if view == "tree":
-            data = await asyncio.to_thread(directory_page, root, path, entry.exclude, offset, 80)
+            started = datetime.now(timezone.utc)
+            try:
+                data = await asyncio.to_thread(directory_page, root, path, entry.exclude, offset, 80)
+            except Exception as exc:
+                await emit("get_tree", started, exc, mcp=False)
+                raise
+            else:
+                await emit("get_tree", started, mcp=False)
         elif view == "source":
             data = await asyncio.to_thread(source_page, root, path, entry.exclude, line)
         elif view == "outline":
@@ -200,6 +210,7 @@ class CodebaseService:
             updated_at=row["updated_at"],
         )
 
+    @scoped
     async def trigger_index(self, req: IndexRequest) -> IndexJobResponse:
         entry = await self._require_worktree(req.project_id, req.worktree_id)
         cbm_project = cbm_project_name(req.project_id, req.worktree_id)
@@ -292,6 +303,7 @@ class CodebaseService:
             )
         return self._row_to_job_response(row)
 
+    @scoped
     async def search_code(self, req: SearchCodeRequest) -> SearchCodeResponse:
         started = time.perf_counter()
         entry = await self._require_worktree(req.project_id, req.worktree_id)
