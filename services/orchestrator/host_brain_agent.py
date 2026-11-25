@@ -179,6 +179,230 @@ def _bridge_request(
         return 503, {"error": str(exc)}
 
 
+def _discover_claude_cli(now: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read-only official discovery for Claude Code CLI: --version, auth status, and non-secret settings.json."""
+    rc, cver, _ = _run_cmd(["claude", "--version"], timeout=10)
+    installed = rc == 0
+    version = cver.splitlines()[0].strip() if installed and cver else None
+    authenticated = False
+    auth_method = "none"
+    notes: str | None = None
+    discovered_models: list[dict[str, Any]] = []
+    verified_ids: list[str] = []
+
+    if installed:
+        arc, aout, _ = _run_cmd(["claude", "auth", "status"], timeout=10)
+        if arc == 0 and aout:
+            try:
+                auth_json = json.loads(aout)
+                authenticated = bool(auth_json.get("loggedIn"))
+                auth_method = str(auth_json.get("authMethod") or ("subscription" if authenticated else "none"))
+            except Exception:
+                authenticated = False
+        if not authenticated:
+            notes = "Claude Code đã cài nhưng chưa đăng nhập. Chạy 'claude auth login' trên Windows (dùng tài khoản thuê bao, không cần API Key)."
+
+        # Read non-secret model configuration from ~/.claude/settings.json (NEVER read auth/token files!)
+        settings_path = Path.home() / ".claude" / "settings.json"
+        seen_ids: set[str] = set()
+        raw_candidates: list[tuple[str, str]] = []
+        if settings_path.is_file():
+            try:
+                cfg = json.loads(settings_path.read_text(encoding="utf-8", errors="replace"))
+                if isinstance(cfg, dict):
+                    ms = cfg.get("modelSettings")
+                    if isinstance(ms, dict):
+                        for mid in ms.keys():
+                            s = str(mid).strip()
+                            if s and s not in seen_ids:
+                                seen_ids.add(s)
+                                raw_candidates.append((s, "local://claude/settings.json#modelSettings"))
+                    def_m = str(cfg.get("model") or "").strip()
+                    if def_m and def_m not in seen_ids:
+                        seen_ids.add(def_m)
+                        raw_candidates.append((def_m, "local://claude/settings.json#model"))
+            except Exception:
+                pass
+
+        for mid, src_url in raw_candidates:
+            status = "verified" if authenticated else "candidate"
+            stage = "cli_available" if authenticated else "catalog_listed"
+            if authenticated:
+                verified_ids.append(mid)
+            discovered_models.append(
+                {
+                    "provider": "claude",
+                    "model_id": mid,
+                    "cli_family": "claude",
+                    "cli_version": version,
+                    "auth_mode": "subscription_cli" if authenticated else "unknown",
+                    "status": status,
+                    "capabilities": {
+                        "verification_stage": stage,
+                        "display_name": mid,
+                        "supported_reasoning_levels": ["none", "low", "medium", "high"],
+                        "noninteractive": True,
+                        "authenticated": authenticated,
+                        "retiring_soon": False,
+                    },
+                    "source_url": src_url,
+                    "verified_at": now,
+                }
+            )
+    else:
+        notes = "Claude Code CLI chưa được cài đặt trên máy chủ Windows."
+
+    cli_entry = {
+        "cli_name": "claude",
+        "installed": installed,
+        "authenticated": authenticated,
+        "auth_method": auth_method,
+        "version": version,
+        "auth_mode": "subscription_cli" if authenticated else "unknown",
+        "verified_model_ids": sorted(set(verified_ids)),
+        "notes": notes,
+        "verified_at": now,
+    }
+    return cli_entry, discovered_models
+
+
+def _discover_codex_cli(now: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read-only official discovery for Codex CLI: --version, login status, models_cache.json & config.toml."""
+    rc, xver, _ = _run_cmd(["codex", "--version"], timeout=10)
+    installed = rc == 0
+    version = xver.splitlines()[0].strip() if installed and xver else None
+    authenticated = False
+    auth_method = "none"
+    notes: str | None = None
+    discovered_models: list[dict[str, Any]] = []
+    verified_ids: list[str] = []
+
+    if installed:
+        lrc, lout, lerr = _run_cmd(["codex", "login", "status"], timeout=10)
+        combined = f"{lout}\n{lerr}".strip()
+        if lrc == 0 and re.search(r"(?i)logged in", combined):
+            authenticated = True
+            auth_method = "chatgpt_subscription" if "chatgpt" in combined.lower() else "codex_auth"
+        else:
+            authenticated = False
+            notes = "Codex CLI đã cài nhưng chưa đăng nhập. Chạy 'codex login' trên Windows để dùng hạn mức thuê bao ChatGPT."
+
+        codex_dir = Path.home() / ".codex"
+        seen_slugs: set[str] = set()
+
+        # 1. Official Codex local models_cache.json (populated by Codex CLI, contains no secrets)
+        cache_path = codex_dir / "models_cache.json"
+        if cache_path.is_file():
+            try:
+                cdata = json.loads(cache_path.read_text(encoding="utf-8", errors="replace"))
+                items = cdata.get("models") if isinstance(cdata, dict) else None
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        slug = str(item.get("slug") or "").strip()
+                        if not slug or slug in seen_slugs:
+                            continue
+                        vis = str(item.get("visibility") or "list").strip().lower()
+                        if vis == "hidden":
+                            continue
+                        seen_slugs.add(slug)
+                        disp = str(item.get("display_name") or slug).strip()
+                        def_eff = str(item.get("default_reasoning_level") or "medium").strip().lower()
+                        raw_levels = item.get("supported_reasoning_levels") or []
+                        levels = [
+                            str(lv.get("effort")).strip().lower()
+                            for lv in raw_levels
+                            if isinstance(lv, dict) and lv.get("effort")
+                        ] or ["low", "medium", "high"]
+                        ctx_win = item.get("context_window")
+                        status = "verified" if authenticated else "candidate"
+                        stage = "cli_available" if authenticated else "catalog_listed"
+                        if authenticated:
+                            verified_ids.append(slug)
+                        discovered_models.append(
+                            {
+                                "provider": "codex",
+                                "model_id": slug,
+                                "cli_family": "codex",
+                                "cli_version": version,
+                                "auth_mode": "subscription_cli" if authenticated else "unknown",
+                                "status": status,
+                                "context_limit": int(ctx_win) if isinstance(ctx_win, int) and ctx_win > 0 else None,
+                                "capabilities": {
+                                    "verification_stage": stage,
+                                    "display_name": disp,
+                                    "effort": def_eff,
+                                    "supported_reasoning_levels": levels,
+                                    "noninteractive": True,
+                                    "authenticated": authenticated,
+                                    "retiring_soon": False,
+                                },
+                                "source_url": "local://codex/models_cache.json",
+                                "verified_at": now,
+                            }
+                        )
+            except Exception:
+                pass
+
+        # 2. Also include configured default model from ~/.codex/config.toml (model = "...") if not already in cache
+        cfg_path = codex_dir / "config.toml"
+        if cfg_path.is_file():
+            try:
+                txt = cfg_path.read_text(encoding="utf-8", errors="replace")
+                m_match = re.search(r'(?m)^\s*model\s*=\s*"([^"]+)"', txt)
+                e_match = re.search(r'(?m)^\s*model_reasoning_effort\s*=\s*"([^"]+)"', txt)
+                if m_match:
+                    slug = m_match.group(1).strip()
+                    if slug and slug not in seen_slugs:
+                        seen_slugs.add(slug)
+                        status = "verified" if authenticated else "candidate"
+                        if authenticated:
+                            verified_ids.append(slug)
+                        discovered_models.append(
+                            {
+                                "provider": "codex",
+                                "model_id": slug,
+                                "cli_family": "codex",
+                                "cli_version": version,
+                                "auth_mode": "subscription_cli" if authenticated else "unknown",
+                                "status": status,
+                                "capabilities": {
+                                    "verification_stage": "cli_available" if authenticated else "catalog_listed",
+                                    "display_name": slug,
+                                    "effort": e_match.group(1).strip() if e_match else "medium",
+                                    "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+                                    "noninteractive": True,
+                                    "authenticated": authenticated,
+                                    "retiring_soon": False,
+                                },
+                                "source_url": "local://codex/config.toml",
+                                "verified_at": now,
+                            }
+                        )
+            except Exception:
+                pass
+
+        if authenticated and not verified_ids:
+            notes = "Codex CLI đã đăng nhập nhưng chưa có ~/.codex/models_cache.json. Mở Codex 1 lần hoặc chạy kiểm tra model để đồng bộ."
+    else:
+        notes = "Codex CLI chưa được cài đặt trên máy chủ Windows."
+
+    cli_entry = {
+        "cli_name": "codex",
+        "installed": installed,
+        "authenticated": authenticated,
+        "auth_method": auth_method,
+        "version": version,
+        "auth_mode": "subscription_cli" if authenticated else "unknown",
+        "verified_model_ids": sorted(set(verified_ids)),
+        "notes": notes,
+        "verified_at": now,
+    }
+    return cli_entry, discovered_models
+
+
+
 def discover_host_clis() -> dict[str, Any]:
     """Scan agy, claude, codex, and gemini CLIs on the Windows host."""
     now = utc_now_iso()
@@ -242,35 +466,15 @@ def discover_host_clis() -> dict[str, Any]:
         }
     )
 
-    # 2. Claude Code (claude)
-    rc, cver, _ = _run_cmd(["claude", "--version"], timeout=10)
-    claude_installed = rc == 0
-    claude_ver = cver.splitlines()[0].strip() if claude_installed and cver else None
-    clis.append(
-        {
-            "cli_name": "claude",
-            "installed": claude_installed,
-            "version": claude_ver,
-            "auth_mode": "subscription_cli",
-            "verified_model_ids": [],
-            "verified_at": now,
-        }
-    )
+    # 2. Claude Code (claude) — P19A.3 official auth & non-secret config discovery
+    claude_cli, claude_models = _discover_claude_cli(now)
+    clis.append(claude_cli)
+    models.extend(claude_models)
 
-    # 3. Codex CLI (codex)
-    rc, xver, _ = _run_cmd(["codex", "--version"], timeout=10)
-    codex_installed = rc == 0
-    codex_ver = xver.splitlines()[0].strip() if codex_installed and xver else None
-    clis.append(
-        {
-            "cli_name": "codex",
-            "installed": codex_installed,
-            "version": codex_ver,
-            "auth_mode": "subscription_cli",
-            "verified_model_ids": [],
-            "verified_at": now,
-        }
-    )
+    # 3. Codex CLI (codex) — P19A.3 official auth, models_cache.json & config.toml discovery
+    codex_cli, codex_models = _discover_codex_cli(now)
+    clis.append(codex_cli)
+    models.extend(codex_models)
 
     # 4. Gemini CLI (honestly report uninstalled)
     rc, gver, _ = _run_cmd(["gemini", "--version"], timeout=8)
@@ -715,7 +919,11 @@ def run_subscription_chat(
         cmd = ["claude", "-p", "--tools", "", "--output-format", "json", "--model", mid]
         rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True, stdin_text=prompt[:16000])
     else:  # codex
-        cmd = ["codex", "exec", "--json", "--sandbox", "read-only", "--model", mid, "-"]
+        cmd = ["codex", "exec", "--json", "--sandbox", "read-only", "--model", mid]
+        eff = (thinking_level or "").strip().lower()
+        if eff in ("low", "medium", "high", "xhigh", "max"):
+            cmd.extend(["-c", f'model_reasoning_effort="{eff}"'])
+        cmd.append("-")
         rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=bounded_timeout, managed=True, stdin_text=prompt[:16000])
 
     duration_ms = int((time.perf_counter() - t0) * 1000)

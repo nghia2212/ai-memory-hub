@@ -364,3 +364,91 @@ def test_p19a2_mock_provider_excluded_from_live_ai_token_and_cost_statistics(cli
     assert summary["known_token_subtotal"] == 250
     assert summary["cost_usd"] is None
     assert summary["estimated_cost_usd"] is None
+
+
+def test_p19a3_codex_and_claude_model_discovery_auth_states_and_reasoning_levels(client):
+    """P19A.3: Verify Codex authenticated models appear as verified/eligible with supported_reasoning_levels,
+    while unauthenticated Claude Code stays truthfully 'unauthenticated' with candidate models (no fake verified),
+    preserving Antigravity models across catalog refresh."""
+    pid, _wid = _setup_project(client)
+    now = datetime.now(timezone.utc)
+    r = client.post(
+        "/v2/catalog/refresh",
+        headers=h("tok-admin"),
+        json={
+            "version": 1,
+            "source_urls": ["local://agy/models", "local://codex/models_cache.json", "local://claude/settings.json"],
+            "expires_at": (now + timedelta(hours=24)).isoformat().replace("+00:00", "Z"),
+            "is_stale": False,
+            "models": [
+                {
+                    "provider": "agy",
+                    "model_id": "gemini-4-neon-medium",
+                    "cli_family": "agy",
+                    "cli_version": "1.5.17",
+                    "auth_mode": "subscription_cli",
+                    "status": "verified",
+                    "capabilities": {"display_name": "Gemini 4 Neon (Medium)", "verification_stage": "cli_available"},
+                    "source_url": "local://agy/models",
+                    "verified_at": now.isoformat().replace("+00:00", "Z"),
+                },
+                {
+                    "provider": "codex",
+                    "model_id": "gpt-6.2-sol",
+                    "cli_family": "codex",
+                    "cli_version": "codex-cli 0.166.0",
+                    "auth_mode": "subscription_cli",
+                    "status": "verified",
+                    "capabilities": {
+                        "display_name": "GPT-6.2-Sol",
+                        "verification_stage": "cli_available",
+                        "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+                    },
+                    "source_url": "local://codex/models_cache.json",
+                    "verified_at": now.isoformat().replace("+00:00", "Z"),
+                },
+                {
+                    "provider": "claude",
+                    "model_id": "claude-sonnet-5-5",
+                    "cli_family": "claude",
+                    "cli_version": "2.1.269 (Claude Code)",
+                    "auth_mode": "unknown",
+                    "status": "candidate",
+                    "capabilities": {"display_name": "claude-sonnet-5-5", "verification_stage": "catalog_listed"},
+                    "source_url": "local://claude/settings.json#modelSettings",
+                    "verified_at": now.isoformat().replace("+00:00", "Z"),
+                },
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    fake_host_disc = {
+        "clis": [
+            {"cli_name": "agy", "installed": True, "authenticated": True, "version": "1.5.17", "verified_model_ids": ["gemini-4-neon-medium"]},
+            {"cli_name": "codex", "installed": True, "authenticated": True, "auth_method": "chatgpt_subscription", "version": "codex-cli 0.166.0", "verified_model_ids": ["gpt-6.2-sol"]},
+            {"cli_name": "claude", "installed": True, "authenticated": False, "auth_method": "none", "version": "2.1.269 (Claude Code)", "verified_model_ids": [], "notes": "Chạy 'claude auth login'"},
+            {"cli_name": "gemini", "installed": False, "authenticated": False, "version": None, "verified_model_ids": []},
+        ],
+        "models": [],
+    }
+    sub_mod = client.app.state.v321_subscription_service.list_execution_sources.__globals__
+    with patch.dict(sub_mod, {"probe_host_runner_clis": lambda timeout=2.5: fake_host_disc}):
+        res = client.get(f"/v321/execution-sources?project_id={pid}&probe_host=true", headers=h("tok-read")).json()
+
+    srcs = {s["source_key"]: s for s in res["sources"]}
+    # Antigravity preserved
+    assert srcs["antigravity"]["eligible_model_count"] == 1
+    # Codex discovered & verified with supported_reasoning_levels
+    assert srcs["codex_cli"]["runtime_status"] == "ready"
+    assert srcs["codex_cli"]["authenticated"] is True
+    assert srcs["codex_cli"]["eligible_model_count"] == 1
+    assert srcs["codex_cli"]["models"][0]["model_id"] == "gpt-6.2-sol"
+    assert "xhigh" in srcs["codex_cli"]["models"][0]["supported_reasoning_levels"]
+    # Claude Code truthfully unauthenticated — candidate model NOT falsely eligible
+    assert srcs["claude_code"]["runtime_status"] == "unauthenticated"
+    assert srcs["claude_code"]["authenticated"] is False
+    assert srcs["claude_code"]["eligible_model_count"] == 0
+    assert srcs["claude_code"]["models"][0]["eligible"] is False
+    assert "Chưa đăng nhập" in (srcs["claude_code"]["models"][0]["ineligible_reason"] or "")
+

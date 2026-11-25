@@ -264,7 +264,7 @@ class V321SubscriptionService:
                 host_cli_map[str(c.get("cli_name") or "")] = c
             for m in host_disc.get("models") or []:
                 cf = str(m.get("cli_family") or m.get("provider") or "")
-                if m.get("status") == "verified":
+                if m.get("status") in ("verified", "candidate"):
                     host_models_by_cli.setdefault(cf, []).append(m)
 
         with self.db.read_conn() as conn:
@@ -274,7 +274,7 @@ class V321SubscriptionService:
             snap = conn.execute("SELECT id, fetched_at FROM v2_catalog_snapshots ORDER BY fetched_at DESC LIMIT 1").fetchone()
             catalog_models_by_cli: dict[str, list[dict[str, Any]]] = {}
             if snap:
-                rows = conn.execute("SELECT * FROM v2_models WHERE snapshot_id = ? AND status = 'verified'", (snap["id"],)).fetchall()
+                rows = conn.execute("SELECT * FROM v2_models WHERE snapshot_id = ? AND status IN ('verified', 'candidate')", (snap["id"],)).fetchall()
                 for r in rows:
                     cf = str(r["cli_family"] or r["provider"] or "")
                     caps = json.loads(r["capabilities_json"] or "{}")
@@ -285,8 +285,10 @@ class V321SubscriptionService:
                             "cli_family": cf,
                             "cli_version": r["cli_version"],
                             "auth_mode": r["auth_mode"],
+                            "status": r["status"],
                             "display_name": caps.get("display_name") or r["model_id"],
-                            "verification_stage": caps.get("verification_stage") or "cli_available",
+                            "verification_stage": caps.get("verification_stage") or ("cli_available" if r["status"] == "verified" else "catalog_listed"),
+                            "supported_reasoning_levels": caps.get("supported_reasoning_levels") or ["none", "low", "medium", "high"],
                             "source_url": r["source_url"],
                             "verified_at": r["verified_at"],
                         }
@@ -315,18 +317,32 @@ class V321SubscriptionService:
                     "cli_family": cli_name,
                     "cli_version": m.get("cli_version"),
                     "auth_mode": m.get("auth_mode") or "subscription_cli",
+                    "status": m.get("status") or "verified",
                     "display_name": caps.get("display_name") or m["model_id"],
-                    "verification_stage": caps.get("verification_stage") or "cli_available",
+                    "verification_stage": caps.get("verification_stage") or ("cli_available" if m.get("status") == "verified" else "catalog_listed"),
+                    "supported_reasoning_levels": caps.get("supported_reasoning_levels") or ["none", "low", "medium", "high"],
                     "source_url": m.get("source_url") or f"local://{cli_name}/models",
                     "verified_at": m.get("verified_at"),
                 }
 
+            authenticated = True
+            auth_method = "subscription_cli"
             if cinfo:
                 installed = bool(cinfo.get("installed"))
                 cli_version = cinfo.get("version")
-                runtime_status = "ready" if (installed and (merged_models or cli_name in ("claude", "codex"))) else ("installed_no_models" if installed else "not_installed")
+                if "authenticated" in cinfo:
+                    authenticated = bool(cinfo.get("authenticated"))
+                    auth_method = str(cinfo.get("auth_method") or ("subscription_cli" if authenticated else "none"))
+                if not installed:
+                    runtime_status = "not_installed"
+                elif not authenticated:
+                    runtime_status = "unauthenticated"
+                elif merged_models:
+                    runtime_status = "ready"
+                else:
+                    runtime_status = "installed_no_models"
                 runtime_note = cinfo.get("notes") or (
-                    f"CLI `{cli_name}` {cli_version} sẵn sàng trên Host Runner." if installed else f"CLI `{cli_name}` chưa cài đặt trên máy chủ."
+                    f"CLI `{cli_name}` {cli_version} sẵn sàng ({len(merged_models)} model)." if runtime_status == "ready" else f"CLI `{cli_name}` ({runtime_status})."
                 )
             elif merged_models:
                 installed = True
@@ -335,17 +351,19 @@ class V321SubscriptionService:
                 runtime_note = "Danh sách model lấy từ Catalog gần nhất; Host Runner hiện offline (có thể dùng Bàn giao sang IDE)." if not host_online else f"Sẵn sàng qua Catalog ({len(merged_models)} model)."
             else:
                 installed = False
+                authenticated = False
                 cli_version = None
                 runtime_status = "host_offline" if not host_online else "not_installed"
                 runtime_note = "Host Runner offline hoặc CLI chưa cài đặt."
 
-            direct_ready = bool(spec["supports_direct_dispatch"] and installed and host_online)
+            direct_ready = bool(spec["supports_direct_dispatch"] and installed and authenticated and host_online)
             models_out: list[dict[str, Any]] = []
             for mid in sorted(merged_models.keys()):
                 m = merged_models[mid]
                 mctrl = model_ctrls.get((skey, mid))
                 m_enabled = bool(mctrl["enabled"]) if mctrl is not None else True
                 m_disabled_reason = mctrl["disabled_reason"] if mctrl is not None else ""
+                m_verified = (m.get("status", "verified") == "verified")
                 q = quota_status(quotas, spec["catalog_provider"], mid, "subscription_cli")
                 reasons: list[str] = []
                 if not admin_enabled:
@@ -356,15 +374,20 @@ class V321SubscriptionService:
                     reasons.append("Đã hết quota" + (f" (reset dự kiến: {q['reset_at']})" if q.get("reset_at") else ""))
                 if not installed:
                     reasons.append(f"CLI `{cli_name}` chưa cài đặt")
-                eligible = admin_enabled and m_enabled and q["state"] != "exhausted" and installed
+                if installed and not authenticated:
+                    reasons.append(f"Chưa đăng nhập `{cli_name}` (chạy `{cli_name} login` / `auth login`)")
+                if not m_verified:
+                    reasons.append("Model ở trạng thái candidate (chưa xác minh đăng nhập/thực thi)")
+                eligible = admin_enabled and m_enabled and q["state"] != "exhausted" and installed and authenticated and m_verified
                 models_out.append(
                     {
                         "source_key": skey,
                         "provider": spec["catalog_provider"],
                         "model_id": mid,
                         "display_name": m.get("display_name") or mid,
-                        "auth_mode": "subscription_cli",
+                        "auth_mode": m.get("auth_mode") or "subscription_cli",
                         "verification_stage": m.get("verification_stage") or "cli_available",
+                        "supported_reasoning_levels": m.get("supported_reasoning_levels") or ["none", "low", "medium", "high"],
                         "source_url": m.get("source_url"),
                         "verified_at": m.get("verified_at"),
                         "admin_enabled": m_enabled,
@@ -388,17 +411,19 @@ class V321SubscriptionService:
                     "billing_label": spec["billing_label"],
                     "admin_enabled": admin_enabled,
                     "disabled_reason": disabled_reason,
+                    "authenticated": authenticated,
+                    "auth_method": auth_method,
                     "runtime_status": runtime_status,
                     "runtime_note": runtime_note,
                     "cli_version": cli_version,
                     "host_runner_online": host_online,
                     "capabilities": {
-                        "chat": bool(spec["supports_direct_dispatch"] and installed),
-                        "task": bool(spec["supports_direct_dispatch"] and installed),
+                        "chat": bool(spec["supports_direct_dispatch"] and installed and authenticated),
+                        "task": bool(spec["supports_direct_dispatch"] and installed and authenticated),
                         "plan_dag": True,
                         "direct_dispatch": direct_ready,
                         "manual_handoff": bool(spec["supports_manual_handoff"]),
-                        "session_resume": bool(spec["supports_session_resume"] and installed),
+                        "session_resume": bool(spec["supports_session_resume"] and installed and authenticated),
                         "mcp_tools": True,
                     },
                     "models": models_out,

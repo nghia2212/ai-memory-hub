@@ -71,8 +71,18 @@
       if (!mObj.eligible && mObj.ineligible_reason) {
         left.append(el("small", `⚠ ${mObj.ineligible_reason}`, "trace-muted"));
       }
-    } else if (src.group === "subscription_cli" && !(src.models || []).length) {
-      left.append(el("small", src.runtime_note || "Chưa có model xác minh trong catalog.", "trace-muted"));
+      // P19A.3: Sync Thinking Level selector to model's actual supported_reasoning_levels
+      const tSel = $("chat-think-sel");
+      if (tSel && Array.isArray(mObj.supported_reasoning_levels) && mObj.supported_reasoning_levels.length) {
+        const curT = tSel.value;
+        const allowedT = mObj.supported_reasoning_levels.filter(x => ["none", "low", "medium", "high", "max"].includes(x));
+        if (allowedT.length) {
+          tSel.replaceChildren(...allowedT.map(lv => new Option(`Think: ${lv}`, lv)));
+          tSel.value = allowedT.includes(curT) ? curT : allowedT[0];
+        }
+      }
+    } else if (src.runtime_note) {
+      left.append(el("small", `ℹ ${src.runtime_note}`, "trace-muted"));
     }
 
     if (defaultsCache && !defaultsCache.persisted && defaultsCache.recommendation_reason) {
@@ -647,7 +657,7 @@
           el("td", s.display_name),
           el("td", s.billing_label),
           el("td", s.admin_enabled ? "Đang bật" : `Đã tắt${s.disabled_reason ? " (" + s.disabled_reason + ")" : ""}`),
-          el("td", `${s.runtime_status}${s.cli_version ? " · " + s.cli_version : ""}`),
+          el("td", `${s.runtime_status}${s.cli_version ? " · " + s.cli_version : ""}${s.runtime_note && s.eligible_model_count === 0 ? " — " + s.runtime_note : ""}`),
           el("td", caps.join(", ") || "—"),
           el("td", `${s.eligible_model_count} / ${(s.models || []).length}`)
         );
