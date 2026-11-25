@@ -1,0 +1,17 @@
+{
+  "upstream_repo": "https://github.com/NousResearch/hermes-agent",
+  "release_tag": "v0.23.4",
+  "docker_image": "docker.io/nousresearch/hermes-agent:v0.23.4",
+  "manifest_list_digest": "sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f",
+  "platforms": {
+    "linux/amd64": "sha256:3bc37fd8546e90fc41fe0d29511b4052840c281617cbcec6093bfe03d86a4ad9",
+    "linux/arm64": "sha256:2223ae201f9b5994468d6e6ec499fc92cfb4a451592c013a02d314ffdaafd860"
+  },
+  "verified_at": "2026-11-25T09:33:00+07:00",
+  "verified_commands": [
+    "docker manifest inspect nousresearch/hermes-agent:v0.23.4",
+    "docker buildx imagetools inspect nousresearch/hermes-agent:v0.23.4"
+  ],
+  "gateway_port": 8642,
+  "deepseek_docs": "https://api-docs.deepseek.com/quick_start/agent_integrations/hermes/"
+}
