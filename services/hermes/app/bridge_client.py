@@ -23,6 +23,12 @@ class BridgeClient:
             headers["Authorization"] = f"Bearer {self._worker_token}"
         return headers
 
+    def post_trace(self, payload: dict[str, Any]) -> dict[str, Any]:
+        req = urllib.request.Request(f"{self.base_url}/v2/traces", data=json.dumps(payload).encode("utf-8"),
+                                     headers=self._headers(), method="POST")
+        with urllib.request.urlopen(req, timeout=min(3,self.timeout_seconds)) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     def fetch_approved_events(self, limit: int = 10) -> list[dict[str, Any]]:
         url = f"{self.base_url}/v1/worker/events?limit={int(limit)}"
         req = urllib.request.Request(url, headers=self._headers(), method="GET")

@@ -8,9 +8,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .db import DatabaseManager, utc_now_iso
+from .db import DatabaseManager, reconcile_expired_job_leases, utc_now_iso
 from .errors import BridgeError
 from .security import redact_payload
+from .trace_usage import sync_usage_trace
+from .quota_guard import quota_status
+from .trace_lifecycle import trace_key, plan_created, agent_claimed, agent_heartbeat, agent_finished
 from .v2_schemas import (
     BrainConfigUpdateRequest,
     BrainRoleConfig,
@@ -80,12 +83,12 @@ def _default_brain_roles() -> list[dict[str, Any]]:
         },
         {
             "role_name": "tier2_primary",
-            "preferred_label": "Gemini 4 Neon Medium (tạm đề xuất: Claude Sonnet 5.5 Medium)",
+            "preferred_label": "Gemini 4 Neon Medium",
             "effective_provider": "agy",
             "effective_model_id": "claude-sonnet-5-5-medium",
             "effective_effort": "medium",
             "auth_mode": "subscription_cli",
-            "availability_status": "verified",
+            "availability_status": "unavailable",
             "availability_reason": "Gemini 4 Neon chưa có trong agy models v1.1.27; tạm dùng claude-sonnet-5-5-medium đã xác minh qua CLI.",
             "fallback_order": ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high", "claude-sonnet-5-5-high"],
             "max_escalations": 1,
@@ -215,6 +218,7 @@ class V2BridgeService:
                 ).fetchall()
                 prev_ids = {r["model_id"] for r in prev_rows}
 
+            quotas = self._latest_quotas(conn)
             enriched_models: list[dict[str, Any]] = []
             cur_ids: set[str] = set()
             retiring_models: list[str] = []
@@ -244,6 +248,7 @@ class V2BridgeService:
                         "auth_mode": m["auth_mode"],
                         "status": m["status"],
                         "verification_stage": stage,
+                        "quota": quota_status(quotas, m["provider"], mid, m["auth_mode"]),
                         "context_limit": m["context_limit"],
                         "output_limit": m["output_limit"],
                         "capabilities": caps,
@@ -456,7 +461,9 @@ class V2BridgeService:
         with self.db.read_conn() as conn:
             self._ensure_project(conn, pid)
             policy = self._get_policy_row(conn, pid)
-            allowed_modes = req.allowed_auth_modes or json.loads(policy["allowed_auth_modes_json"])
+            allowed_modes = json.loads(policy["allowed_auth_modes_json"])
+            if req.allowed_auth_modes is not None:
+                allowed_modes = [mode for mode in allowed_modes if mode in req.allowed_auth_modes]
             if not policy["allow_paid_api_fallback"]:
                 allowed_modes = [m for m in allowed_modes if m != "api_key"]
 
@@ -475,33 +482,60 @@ class V2BridgeService:
                 }
 
             snap = conn.execute(
-                "SELECT id FROM v2_catalog_snapshots ORDER BY fetched_at DESC LIMIT 1"
+                "SELECT id, expires_at FROM v2_catalog_snapshots ORDER BY fetched_at DESC LIMIT 1"
             ).fetchone()
             if not snap:
                 raise BridgeError(503, "catalog_empty", "No verified model catalog snapshot available")
 
+            now = utc_now_iso()
+            if snap["expires_at"] and conn.execute("SELECT julianday(?) <= julianday(?)", (snap["expires_at"], now)).fetchone()[0]:
+                raise BridgeError(409, "catalog_stale", "Refresh model catalog before routing")
             models = conn.execute(
                 "SELECT * FROM v2_models WHERE snapshot_id = ? AND status = 'verified'",
                 (snap["id"],),
             ).fetchall()
-            eligible = [dict(m) for m in models if m["auth_mode"] in allowed_modes]
+            eligible = [dict(m) for m in models if m["auth_mode"] in allowed_modes
+                        and not json.loads(m["capabilities_json"]).get("retiring_soon")
+                        and (not m["expires_at"] or conn.execute("SELECT julianday(?) > julianday(?)", (m["expires_at"], now)).fetchone()[0])]
             if not eligible:
                 raise BridgeError(422, "no_eligible_model", "No eligible verified model matches policy constraints")
+
+            quotas = self._latest_quotas(conn)
+            eligible = [m for m in eligible if quota_status(quotas,m["provider"],m["model_id"],m["auth_mode"])["state"] != "exhausted"]
+            if not eligible:
+                raise BridgeError(409, "quota_exhausted", "All eligible models have exhausted quota")
 
             evals = conn.execute(
                 """
                 SELECT * FROM v2_model_evaluations
                 WHERE task_type = ? AND complexity = ? AND (project_id = ? OR project_id IS NULL)
+                ORDER BY (project_id IS NOT NULL) DESC, sample_count DESC, created_at DESC
                 """,
                 (req.task_type, req.complexity, pid),
             ).fetchall()
-            eval_map = {(e["provider"], e["model_id"], e["auth_mode"]): dict(e) for e in evals}
+            eval_map = {}
+            for e in evals:
+                if e["sample_count"] > 0 and e["evidence_kind"] != "hypothesis":
+                    eval_map.setdefault((e["provider"], e["model_id"], e["auth_mode"]), dict(e))
+            role = "tier1_light" if req.complexity in ("XS", "S") else "tier2_primary" if req.complexity == "M" else "tier3_advanced"
+            configured = conn.execute("SELECT effective_provider, effective_model_id, effective_effort FROM v2_brain_roles WHERE project_id=? AND role_name=?", (pid, role)).fetchone()
+            preferred = (configured["effective_provider"], configured["effective_model_id"]) if configured else (None, None)
+            limit = req.max_cost_usd
+            if policy["max_task_cost_usd"] is not None:
+                limit = min(limit, policy["max_task_cost_usd"]) if limit is not None else policy["max_task_cost_usd"]
+            if limit is not None:
+                eligible = [m for m in eligible if (ev := eval_map.get((m["provider"], m["model_id"], m["auth_mode"]))) and ev["avg_effective_cost_usd"] is not None and ev["avg_effective_cost_usd"] <= limit]
+            if not eligible:
+                raise BridgeError(422, "no_budget_evidence", "No eligible model has verified cost evidence within the requested budget")
 
-            def score(m: dict[str, Any]) -> tuple[float, float]:
+            def score(m: dict[str, Any]):
                 ev = eval_map.get((m["provider"], m["model_id"], m["auth_mode"]))
-                quality = float(ev["correctness_score"] or 0.5) if ev else 0.5
-                cost = float(ev["avg_effective_cost_usd"] or m["price_input_per_1m"] or 0.0) if ev else float(m["price_input_per_1m"] or 0.0)
-                return (-quality, cost)
+                quality = ev["correctness_score"] if ev and ev["correctness_score"] is not None else None
+                cost = ev["avg_effective_cost_usd"] if ev else None
+                return (quota_status(quotas,m["provider"],m["model_id"],m["auth_mode"])["state"] != "observed_available", quality is None, -(quality if quality is not None else 0),
+                        (m["provider"], m["model_id"]) != preferred,
+                        cost is None, cost if cost is not None else 0,
+                        m["provider"], m["model_id"])
 
             ranked = sorted(eligible, key=score)
             chosen = ranked[0]
@@ -516,7 +550,7 @@ class V2BridgeService:
                 "rationale": (
                     f"Chọn từ catalog xác minh dựa trên {ev['sample_count']} mẫu ({ev['evidence_kind']})"
                     if ev
-                    else "Cold-start: chưa có mẫu đánh giá thực tế, chọn model xác minh rẻ/phù hợp nhất"
+                    else "Cold-start: chưa có mẫu đánh giá; ưu tiên role cấu hình nếu hợp lệ, không giả định chi phí bằng 0"
                 ),
                 "evidence_kind": ev["evidence_kind"] if ev else "hypothesis",
                 "cold_start": ev is None,
@@ -863,6 +897,7 @@ class V2BridgeService:
     def create_plan(self, req: PlanCreateRequest, created_by: str = "planner") -> dict[str, Any]:
         pid = str(req.project_id)
         wid = str(req.worktree_id)
+        trace_started = utc_now_iso()
         rev_hash = self._validate_dag_and_hash(req.objective, req.tasks)
         plan_id = str(uuid.uuid4())
         rev_id = str(uuid.uuid4())
@@ -908,9 +943,16 @@ class V2BridgeService:
                 target_id=plan_id,
                 details={"revision_id": rev_id, "revision_hash": rev_hash, "task_count": len(req.tasks)},
             )
+            plan_created(conn, plan_id=plan_id, project_id=pid, worktree_id=wid,
+                         actor=created_by, started_at=trace_started, ended_at=utc_now_iso(), task_count=len(req.tasks))
         return self.get_plan(plan_id, pid)
 
+    def _reconcile_expired_leases(self) -> None:
+        with self.db.write_tx() as conn:
+            reconcile_expired_job_leases(conn, utc_now_iso())
+
     def list_plans(self, project_id: str) -> dict[str, Any]:
+        self._reconcile_expired_leases()
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)
             rows = conn.execute(
@@ -920,6 +962,7 @@ class V2BridgeService:
             return {"items": [dict(r) for r in rows]}
 
     def get_plan(self, plan_id: str, project_id: str) -> dict[str, Any]:
+        self._reconcile_expired_leases()
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)
             plan = conn.execute(
@@ -943,8 +986,27 @@ class V2BridgeService:
             return {
                 **dict(plan),
                 "revisions": [dict(r) for r in revs],
+                "editable_tasks": json.loads(conn.execute("SELECT plan_json FROM v2_plan_revisions WHERE id=? AND plan_id=?", (plan["current_revision_id"], plan_id)).fetchone()["plan_json"]).get("tasks", []),
                 "tasks": [dict(t) for t in tasks],
                 "approvals": [dict(a) for a in approvals],
+                "dependencies": [dict(x) for x in conn.execute("SELECT d.task_id, d.depends_on_task_id FROM v2_task_dependencies d JOIN v2_tasks t ON t.id=d.task_id WHERE t.plan_id=? AND t.revision_id=?", (plan_id, plan["current_revision_id"]))],
+                "forecast": json.loads(forecast["forecast_json"]) if (forecast := conn.execute(
+                    "SELECT f.forecast_json FROM v2_forecast_snapshots f JOIN v2_plan_revisions r "
+                    "ON r.forecast_id=f.id WHERE r.id=? AND f.project_id=?",
+                    (plan["current_revision_id"], project_id),
+                ).fetchone()) else None,
+                "attempts": [redact_payload(dict(row)) for row in conn.execute(
+                    """SELECT a.id, a.task_id, a.plan_revision_id, a.runner_id, a.status,
+                              a.started_at, a.ended_at, a.error_code, a.error_summary,
+                              l.heartbeat_at, l.expires_at, s.id AS session_id, o.handoff_summary,
+                              o.tests_passed, o.duration_ms, o.actual_changed_files
+                       FROM v2_tasks t JOIN v2_task_attempts a ON a.task_id=t.id
+                       LEFT JOIN v2_job_leases l ON l.attempt_id=a.id
+                       LEFT JOIN v2_sessions s ON s.attempt_id=a.id
+                       LEFT JOIN v2_session_outcomes o ON o.session_id=s.id
+                       WHERE t.plan_id=? AND t.project_id=?
+                       ORDER BY a.started_at DESC LIMIT 100""", (plan_id, project_id)
+                )],
             }
 
     def update_plan_revision(self, plan_id: str, req: PlanRevisionUpdateRequest) -> dict[str, Any]:
@@ -957,9 +1019,20 @@ class V2BridgeService:
             ).fetchone()
             if not plan:
                 raise BridgeError(404, "plan_not_found", "Plan not found")
-            if plan["status"] in ("RUNNING", "COMPLETED", "CANCELLED"):
+            if conn.execute(
+                "SELECT 1 FROM v2_job_leases l JOIN v2_tasks t ON t.id=l.task_id "
+                "WHERE t.plan_id=? AND l.released_at IS NULL LIMIT 1", (plan_id,),
+            ).fetchone() or plan["status"] in ("RUNNING", "COMPLETED", "CANCELLED"):
                 raise BridgeError(409, "plan_state_conflict", f"Cannot revise plan in state {plan['status']}")
 
+            unresolved = conn.execute(
+                "SELECT 1 FROM v2_tasks WHERE plan_id = ? AND state IN ('leased','running','blocked') LIMIT 1",
+                (plan_id,),
+            ).fetchone()
+            if unresolved:
+                raise BridgeError(409, "unresolved_attempt", "Review active or unknown task outcomes before revising")
+            if req.expected_revision_id and str(req.expected_revision_id) != plan["current_revision_id"]:
+                raise BridgeError(409, "stale_revision", "Reload the current revision before editing")
             rev_hash = self._validate_dag_and_hash(plan["objective"], req.tasks)
             max_rev = conn.execute(
                 "SELECT COALESCE(MAX(revision_number), 0) AS n FROM v2_plan_revisions WHERE plan_id = ?",
@@ -1118,8 +1191,15 @@ class V2BridgeService:
             ).fetchone()
             if not plan:
                 raise BridgeError(404, "plan_not_found", "Plan not found")
-            if action == "resume" and not plan["approved_revision_id"]:
-                raise BridgeError(409, "no_approved_revision", "Cannot resume plan without approved revision")
+            if action == "resume":
+                if plan["status"] != "PAUSED" or not plan["approved_revision_id"]:
+                    raise BridgeError(409, "no_approved_revision", "Only paused approved plans can resume")
+                blocked = conn.execute(
+                    "SELECT 1 FROM v2_tasks WHERE revision_id = ? AND state = 'blocked' LIMIT 1",
+                    (plan["approved_revision_id"],),
+                ).fetchone()
+                if blocked:
+                    raise BridgeError(409, "unknown_outcome", "Review blocked task outcomes before creating a new approved plan")
             conn.execute(
                 "UPDATE v2_plans SET status = ?, updated_at = ? WHERE id = ?",
                 (target_status, now, plan_id),
@@ -1168,6 +1248,8 @@ class V2BridgeService:
             if policy["kill_switch"]:
                 raise BridgeError(403, "kill_switch_active", "Project kill switch is active")
 
+            reconcile_expired_job_leases(conn, now)
+
             # Enforce concurrency limit
             active_leases = conn.execute(
                 """
@@ -1189,13 +1271,16 @@ class V2BridgeService:
                 JOIN v2_plan_revisions r ON r.id = t.revision_id
                 WHERE t.project_id = ? AND t.worktree_id = ? AND t.state = 'queued'
                   AND p.status IN ('APPROVED', 'RUNNING')
-                  AND p.approved_revision_id = t.revision_id
+                  AND p.approved_revision_id = t.revision_id AND p.current_revision_id = t.revision_id
+                  AND (? IS NULL OR p.id = ?)
                 ORDER BY t.created_at ASC
                 """,
-                (pid, wid),
+                (pid, wid, str(req.plan_id) if req.plan_id else None, str(req.plan_id) if req.plan_id else None),
             ).fetchall()
 
             chosen: dict[str, Any] | None = None
+            quota_blocked = False
+            quotas = self._latest_quotas(conn)
             for cand in candidates:
                 unmet = conn.execute(
                     """
@@ -1207,11 +1292,14 @@ class V2BridgeService:
                     (cand["id"],),
                 ).fetchone()
                 if int(unmet["cnt"]) == 0:
+                    if quota_status(quotas,cand["assigned_provider"],cand["assigned_model_id"],cand["auth_mode"])["state"] == "exhausted":
+                        quota_blocked = True
+                        continue
                     chosen = dict(cand)
                     break
 
             if not chosen:
-                return {"claimed": False, "reason": "no_ready_tasks"}
+                return {"claimed": False, "reason": "quota_exhausted" if quota_blocked else "no_ready_tasks"}
 
             att_row = conn.execute(
                 "SELECT COALESCE(MAX(attempt_number), 0) AS n FROM v2_task_attempts WHERE task_id = ?",
@@ -1264,8 +1352,11 @@ class V2BridgeService:
             conn.execute("UPDATE v2_tasks SET state = 'leased', updated_at = ? WHERE id = ?", (now, chosen["id"]))
             conn.execute("UPDATE v2_plans SET status = 'RUNNING', updated_at = ? WHERE id = ? AND status = 'APPROVED'", (now, chosen["plan_id"]))
 
+            agent_claimed(conn, task=chosen, attempt_id=attempt_id, session_id=session_id,
+                          runner_id=req.runner_id, started_at=now, attempt_number=attempt_number)
             return {
                 "claimed": True,
+                "root_trace_id": conn.execute("SELECT root_trace_id FROM v22_execution_traces WHERE trace_id=?", (trace_key("attempt",attempt_id),)).fetchone()[0],
                 "job_id": chosen["id"],
                 "task_id": chosen["id"],
                 "task_key": chosen["task_key"],
@@ -1305,10 +1396,15 @@ class V2BridgeService:
             SELECT l.*, t.project_id, t.worktree_id, t.plan_id, t.revision_id, s.id AS session_id
             FROM v2_job_leases l
             JOIN v2_tasks t ON t.id = l.task_id
+            JOIN v2_plans p ON p.id = t.plan_id
             LEFT JOIN v2_sessions s ON s.attempt_id = l.attempt_id
             WHERE l.task_id = ? AND t.project_id = ? AND l.lease_id = ? AND l.released_at IS NULL
+              AND julianday(l.expires_at) > julianday(?)
+              AND t.state IN ('leased', 'running')
+              AND p.approved_revision_id = t.revision_id
+              AND p.status IN ('APPROVED', 'RUNNING', 'PAUSED')
             """,
-            (job_id, project_id, lease_id),
+            (job_id, project_id, lease_id, utc_now_iso()),
         ).fetchone()
         if not row:
             raise BridgeError(409, "lease_invalid", "Active lease not found for job")
@@ -1320,6 +1416,8 @@ class V2BridgeService:
         expires_at = (now_dt + timedelta(seconds=req.lease_seconds)).isoformat()
         with self.db.write_tx() as conn:
             lease = self._verify_active_lease(conn, job_id, str(req.project_id), str(req.lease_id))
+            if lease["runner_id"] != req.runner_id:
+                raise BridgeError(409, "runner_mismatch", "Lease belongs to a different runner")
             conn.execute(
                 "UPDATE v2_job_leases SET heartbeat_at = ?, expires_at = ? WHERE lease_id = ?",
                 (now, expires_at, str(req.lease_id)),
@@ -1332,6 +1430,7 @@ class V2BridgeService:
                 "UPDATE v2_tasks SET state = 'running', updated_at = ? WHERE id = ? AND state = 'leased'",
                 (now, job_id),
             )
+            agent_heartbeat(conn, lease["attempt_id"], now)
         return {"job_id": job_id, "lease_id": str(req.lease_id), "lease_expires_at": expires_at}
 
     def record_job_event(self, job_id: str, req: JobEventRequest) -> dict[str, Any]:
@@ -1377,11 +1476,12 @@ class V2BridgeService:
                         handoff_summary = excluded.handoff_summary,
                         recorded_at = excluded.recorded_at
                     """,
-                    (parent_sid, req.peak_context_tokens, req.handoff_summary, now),
+                    (parent_sid, req.peak_context_tokens, redact_payload(req.handoff_summary), now),
                 )
             conn.execute("UPDATE v2_tasks SET state = 'checkpointed', updated_at = ? WHERE id = ?", (now, job_id))
             conn.execute("UPDATE v2_task_attempts SET status = 'checkpointed' WHERE id = ?", (lease["attempt_id"],))
             conn.execute("UPDATE v2_job_leases SET released_at = ? WHERE lease_id = ?", (now, str(req.lease_id)))
+            agent_finished(conn, lease["attempt_id"], "unknown", now, "checkpointed", "Checkpoint saved; final outcome not yet known")
             return {"job_id": job_id, "checkpointed": True, "parent_session_id": parent_sid}
 
     def complete_job(self, job_id: str, req: JobCompleteRequest) -> dict[str, Any]:
@@ -1396,8 +1496,12 @@ class V2BridgeService:
                 SET status = ?, ended_at = ?, error_code = ?, error_summary = ?
                 WHERE id = ?
                 """,
-                (req.outcome, now, req.error_code, req.error_summary, lease["attempt_id"]),
+                (req.outcome, now, req.error_code, redact_payload(req.error_summary), lease["attempt_id"]),
             )
+            if req.error_code == "quota_exceeded":
+                model = conn.execute("SELECT assigned_provider,assigned_model_id,auth_mode FROM v2_tasks WHERE id=?", (job_id,)).fetchone()
+                if model:
+                    conn.execute("""INSERT INTO v2_quota_snapshots (id,provider,auth_mode,account_bucket,quota_kind,unit,numerator,denominator,window_label,reset_at,source,confounded,observed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (str(uuid.uuid4()),model["assigned_provider"],model["auth_mode"],"model:"+model["assigned_model_id"],"subscription_quota" if model["auth_mode"]=="subscription_cli" else "rate_limit","availability_flag",1,1,"until confirmed reset",None,"runner_quota_error",0,now))
             task_state = req.outcome if req.outcome in ("succeeded", "failed", "cancelled") else "failed"
             conn.execute("UPDATE v2_tasks SET state = ?, updated_at = ? WHERE id = ?", (task_state, now, job_id))
 
@@ -1426,7 +1530,7 @@ class V2BridgeService:
                         req.duration_ms,
                         req.actual_changed_files,
                         req.peak_context_tokens,
-                        req.handoff_summary,
+                        redact_payload(req.handoff_summary),
                         now,
                     ),
                 )
@@ -1450,6 +1554,8 @@ class V2BridgeService:
                 conn.execute("UPDATE v2_plans SET status = ?, updated_at = ? WHERE id = ?", (plan_status, now, lease["plan_id"]))
                 self._reconcile_plan_forecast_actuals(conn, lease["plan_id"], lease["revision_id"], now)
 
+            trace_status = req.outcome if req.outcome in ("succeeded", "failed", "cancelled") else "blocked"
+            agent_finished(conn, lease["attempt_id"], trace_status, now, req.error_code, req.error_summary)
         return {"job_id": job_id, "outcome": req.outcome, "completed_at": now}
 
     def cancel_job(self, job_id: str, project_id: str, actor: str = "admin") -> dict[str, Any]:
@@ -1471,6 +1577,8 @@ class V2BridgeService:
                 "UPDATE v2_budget_reservations SET status = 'released', settled_at = ? WHERE task_id = ? AND status = 'reserved'",
                 (now, job_id),
             )
+            for attempt in conn.execute("SELECT id FROM v2_task_attempts WHERE task_id=? AND status='cancelled' AND ended_at=?", (job_id,now)).fetchall():
+                agent_finished(conn, attempt["id"], "cancelled", now)
             self._audit(conn, project_id=project_id, actor=actor, action="job_cancelled", target_type="task", target_id=job_id)
         return {"job_id": job_id, "state": "cancelled"}
 
@@ -1482,14 +1590,16 @@ class V2BridgeService:
         now = utc_now_iso()
         with self.db.write_tx() as conn:
             self._ensure_worktree(conn, pid, wid)
-            existing = conn.execute("SELECT id, project_id FROM v2_sessions WHERE id = ?", (sid,)).fetchone()
+            existing = conn.execute("SELECT id, project_id, worktree_id, role, status, attempt_id FROM v2_sessions WHERE id = ?", (sid,)).fetchone()
             if existing:
-                if existing["project_id"] != pid:
+                if existing["project_id"] != pid or existing["worktree_id"] != wid or existing["role"] != req.role:
                     raise BridgeError(404, "session_not_found", "Session not found for project")
-                conn.execute(
-                    "UPDATE v2_sessions SET status = ?, ended_at = CASE WHEN ? != 'running' THEN ? ELSE ended_at END WHERE id = ?",
-                    (req.status, req.status, now, sid),
-                )
+                # A late hook must not reopen a completed session; managed lifecycle is lease-owned.
+                if existing["attempt_id"] is None and existing["status"] not in ("completed", "failed", "cancelled"):
+                    conn.execute(
+                        "UPDATE v2_sessions SET status = ?, ended_at = CASE WHEN ? != 'running' THEN ? ELSE NULL END, model_id = CASE WHEN model_id = 'unknown' THEN ? ELSE model_id END WHERE id = ?",
+                        (req.status, req.status, now, req.model_id, sid),
+                    )
             else:
                 conn.execute(
                     """
@@ -1572,27 +1682,22 @@ class V2BridgeService:
             }
 
         fields = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "cost_usd")
-        deltas: dict[str, float | int] = {}
-        latest_cum: dict[str, float | int] = {}
+        totals: dict[str, float | int] = {}
         kind = "unavailable"
         for r in rows:
             if r["measurement_kind"] == "measured":
                 kind = "measured"
             elif r["measurement_kind"] == "estimated" and kind == "unavailable":
                 kind = "estimated"
-            if r["counter_mode"] == "delta":
-                for f in fields:
-                    if r[f] is not None:
-                        deltas[f] = deltas.get(f, 0) + r[f]
-            else:
-                for f in fields:
-                    if r[f] is not None:
-                        latest_cum[f] = r[f]
+            for f in fields:
+                if r[f] is not None:
+                    # A cumulative event covers previous increments; later deltas extend it.
+                    totals[f] = r[f] if r["counter_mode"] == "cumulative" else totals.get(f, 0) + r[f]
 
-        out: dict[str, Any] = {"measurement_kind": kind}
+        out: dict[str, Any] = {"measurement_kind": kind, "sources": sorted({r["source"] for r in rows}), "observed_at": max(r["observed_at"] for r in rows)}
         for f in fields:
-            if f in deltas or f in latest_cum:
-                val = deltas.get(f, 0) + latest_cum.get(f, 0)
+            if f in totals:
+                val = totals[f]
                 out[f] = round(float(val), 6) if f == "cost_usd" else int(val)
             else:
                 out[f] = None
@@ -1611,6 +1716,7 @@ class V2BridgeService:
         from_date: str | None = None,
         to_date: str | None = None,
     ) -> dict[str, Any]:
+        self._reconcile_expired_leases()
         with self.db.read_conn() as conn:
             self._ensure_project(conn, project_id)
             clauses = ["s.project_id = ?"]
@@ -1628,10 +1734,10 @@ class V2BridgeService:
                 clauses.append("s.status = ?")
                 params.append(outcome)
             if task_type:
-                clauses.append("tf.task_type = ?")
+                clauses.append("COALESCE(tf.task_type, t.task_type) = ?")
                 params.append(task_type)
             if complexity:
-                clauses.append("tf.complexity = ?")
+                clauses.append("COALESCE(tf.complexity, t.complexity) = ?")
                 params.append(complexity)
             if from_date:
                 clauses.append("s.started_at >= ?")
@@ -1642,10 +1748,16 @@ class V2BridgeService:
 
             rows = conn.execute(
                 f"""
-                SELECT s.*, tf.task_type, tf.complexity, so.accepted, so.tests_passed, so.duration_ms, so.retries, so.peak_context_tokens
+                SELECT s.*, COALESCE(tf.task_type, t.task_type) AS task_type, COALESCE(tf.complexity, t.complexity) AS complexity, so.accepted, so.tests_passed, so.duration_ms,
+                       so.retries, so.peak_context_tokens, a.runner_id, a.status AS attempt_state,
+                       a.error_code, l.heartbeat_at, l.expires_at, w.branch, t.title AS task_title
                 FROM v2_sessions s
                 LEFT JOIN v2_task_features tf ON tf.session_id = s.id AND tf.phase = 'planned'
                 LEFT JOIN v2_session_outcomes so ON so.session_id = s.id
+                LEFT JOIN v2_task_attempts a ON a.id=s.attempt_id
+                LEFT JOIN v2_job_leases l ON l.attempt_id=a.id
+                JOIN worktrees w ON w.id=s.worktree_id
+                LEFT JOIN v2_tasks t ON t.id=s.task_id
                 WHERE {' AND '.join(clauses)}
                 ORDER BY s.started_at DESC
                 LIMIT 100
@@ -1691,6 +1803,8 @@ class V2BridgeService:
             ).fetchone()
             if not row:
                 raise BridgeError(404, "session_not_found", "Session not found for project")
+            # Retain trace hierarchy but remove session accounting on retention deletion.
+            conn.execute("UPDATE v22_execution_traces SET input_tokens=NULL,output_tokens=NULL,cache_read_tokens=NULL,cache_write_tokens=NULL,reasoning_tokens=NULL,cost_usd=NULL WHERE session_id=?", (session_id,))
             conn.execute("DELETE FROM v2_sessions WHERE id = ?", (session_id,))
             self._audit(
                 conn,
@@ -1710,8 +1824,8 @@ class V2BridgeService:
         with self.db.write_tx() as conn:
             self._ensure_worktree(conn, pid, wid)
             sess = conn.execute(
-                "SELECT id, project_id FROM v2_sessions WHERE id = ? AND project_id = ?",
-                (sid, pid),
+                "SELECT id, project_id FROM v2_sessions WHERE id = ? AND project_id = ? AND worktree_id = ?",
+                (sid, pid, wid),
             ).fetchone()
             if not sess:
                 raise BridgeError(404, "session_not_found", "Session not found for project")
@@ -1751,6 +1865,7 @@ class V2BridgeService:
                     now,
                 ),
             )
+            sync_usage_trace(conn, sid)
             return {"usage_event_id": uid, "deduplicated": False}
 
     def get_usage_summary(self, project_id: str) -> dict[str, Any]:
@@ -1766,23 +1881,28 @@ class V2BridgeService:
                     "input_tokens": None,
                     "output_tokens": None,
                     "cache_read_tokens": None,
+                    "cache_write_tokens": None,
+                    "reasoning_tokens": None,
                     "cost_usd": None,
                 }
                 kind = "unavailable"
+                coverage = {"measured": 0, "estimated": 0, "unavailable": 0}
                 for s in sessions:
                     if s["role"] not in target_roles:
                         continue
                     c = self._aggregate_session_counters(conn, s["id"])
+                    coverage[c["measurement_kind"]] += 1
                     if c["measurement_kind"] == "measured":
                         kind = "measured"
                     elif c["measurement_kind"] == "estimated" and kind == "unavailable":
                         kind = "estimated"
-                    for f in ("input_tokens", "output_tokens", "cache_read_tokens", "cost_usd"):
+                    for f in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "cost_usd"):
                         if c[f] is not None:
                             totals[f] = (totals[f] or 0) + c[f]
                 if totals["cost_usd"] is not None:
                     totals["cost_usd"] = round(float(totals["cost_usd"]), 6)
                 totals["measurement_kind"] = kind
+                totals["coverage"] = coverage
                 return totals
 
             quotas = self._latest_quotas(conn)

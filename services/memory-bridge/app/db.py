@@ -15,7 +15,10 @@ from typing import Iterator
 
 from .errors import BridgeError
 
-CURRENT_SCHEMA_VERSION = 3
+from .trace_schema import TRACE_SQL
+from .trace_lifecycle import agent_finished
+
+CURRENT_SCHEMA_VERSION = 4
 
 MIGRATIONS: list[tuple[int, str, str]] = [
     (
@@ -521,6 +524,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_v2_audit_time ON v2_audit_log(project_id, created_at DESC);
         """,
     ),
+    (4, "execution_traces_v22", TRACE_SQL),
 ]
 
 
@@ -534,6 +538,41 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def reconcile_expired_job_leases(conn: sqlite3.Connection, now: str) -> int:
+    """Caller owns write transaction. Unknown outcomes must never auto-requeue."""
+    rows = conn.execute(
+        """SELECT l.lease_id, l.attempt_id, l.task_id, t.plan_id
+           FROM v2_job_leases l JOIN v2_tasks t ON t.id = l.task_id
+           WHERE l.released_at IS NULL AND julianday(l.expires_at) <= julianday(?)""",
+        (now,),
+    ).fetchall()
+    for row in rows:
+        lease_id, attempt_id, task_id, plan_id = row
+        conn.execute("UPDATE v2_job_leases SET released_at = ? WHERE lease_id = ?", (now, lease_id))
+        conn.execute(
+            """UPDATE v2_task_attempts SET status = 'orphaned', ended_at = ?,
+               error_code = 'lease_expired', error_summary = 'Outcome unknown; review before retry'
+               WHERE id = ? AND status IN ('claimed', 'running')""",
+            (now, attempt_id),
+        )
+        conn.execute(
+            """UPDATE v2_sessions SET status = 'partial', incomplete_coverage = 1, ended_at = ?
+               WHERE attempt_id = ? AND status = 'running'""", (now, attempt_id),
+        )
+        changed = conn.execute(
+            "UPDATE v2_tasks SET state = 'blocked', updated_at = ? WHERE id = ? AND state IN ('leased', 'running')",
+            (now, task_id),
+        ).rowcount
+        if changed:
+            conn.execute(
+                "UPDATE v2_plans SET status = 'PAUSED', updated_at = ? WHERE id = ? AND status IN ('APPROVED', 'RUNNING')",
+                (now, plan_id),
+            )
+        agent_finished(conn, attempt_id, "unknown", now, "lease_expired", "Outcome unknown; review before retry")
+        # Preserve budget reservation: usage/outcome is not known.
+    return len(rows)
 
 
 class DatabaseManager:
@@ -603,7 +642,7 @@ class DatabaseManager:
                 raise
 
     def _reconcile_on_startup(self, conn: sqlite3.Connection) -> None:
-        """Reset non-persistent auto mode and orphan/partial active leases on restart."""
+        """Reset non-persistent auto mode; preserve live leases and quarantine expired attempts."""
         now = utc_now_iso()
         conn.execute("BEGIN IMMEDIATE;")
         try:
@@ -615,30 +654,30 @@ class DatabaseManager:
                 """,
                 (now,),
             )
+            reconcile_expired_job_leases(conn, now)
+            # Keep valid managed leases across Bridge restarts. Unleased external
+            # sessions have no live proof after restart.
             conn.execute(
-                "UPDATE v2_job_leases SET released_at = ? WHERE released_at IS NULL",
-                (now,),
-            )
-            conn.execute(
-                """
-                UPDATE v2_task_attempts
-                SET status = 'orphaned', ended_at = ?, error_code = 'restart_reconciled', error_summary = 'Bridge restarted while attempt was active'
-                WHERE status IN ('claimed', 'running')
-                """,
-                (now,),
-            )
-            conn.execute(
-                "UPDATE v2_tasks SET state = 'queued', updated_at = ? WHERE state IN ('leased', 'running')",
-                (now,),
-            )
-            conn.execute(
-                "UPDATE v2_sessions SET status = 'partial', incomplete_coverage = 1, ended_at = ? WHERE status = 'running'",
-                (now,),
+                """UPDATE v2_sessions SET status = 'partial', incomplete_coverage = 1, ended_at = ?
+                   WHERE status = 'running' AND NOT EXISTS (
+                     SELECT 1 FROM v2_job_leases l
+                     WHERE l.attempt_id = v2_sessions.attempt_id AND l.released_at IS NULL
+                       AND julianday(l.expires_at) > julianday(?)
+                   )""",
+                (now, now),
             )
             conn.execute("COMMIT;")
         except Exception:
             conn.execute("ROLLBACK;")
             raise
+
+    @staticmethod
+    def expire_leases(conn: sqlite3.Connection, now: str) -> None:
+        reconcile_expired_job_leases(conn, now)
+
+    def reconcile_expired_leases(self) -> None:
+        with self.write_tx() as conn:
+            self.expire_leases(conn, utc_now_iso())
 
     def check_health(self) -> tuple[bool, int]:
         if not self.is_ready:

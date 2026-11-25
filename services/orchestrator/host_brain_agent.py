@@ -26,6 +26,10 @@ from typing import Any
 
 HUB_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = HUB_ROOT / ".env"
+# The Windows launcher historically invokes this file directly.
+if str(HUB_ROOT) not in sys.path:
+    sys.path.insert(0, str(HUB_ROOT))
+
 
 KNOWN_CATALOG_MODELS: list[dict[str, Any]] = [
     {
@@ -106,11 +110,13 @@ def load_env_map(path: Path = ENV_PATH) -> dict[str, str]:
     return out
 
 
-def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25) -> tuple[int, str, str]:
+def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25, managed: bool = False) -> tuple[int, str, str]:
     exe = shutil.which(args[0])
     if not exe:
         return 127, "", f"CLI not found on PATH: {args[0]}"
     cmd = [exe, *args[1:]]
+    if os.name == "nt" and len(subprocess.list2cmdline(cmd).encode("utf-16-le")) // 2 > (7000 if exe.lower().endswith((".cmd", ".bat")) else 30000):
+        return 1, "", "Prompt exceeds safe Windows CLI argument size; split the task or use a verified stdin adapter."
     try:
         proc = subprocess.run(
             cmd,
@@ -121,6 +127,7 @@ def _run_cmd(args: list[str], *, cwd: str | None = None, timeout: int = 25) -> t
             errors="replace",
             timeout=timeout,
             shell=False,
+            env={**os.environ, "AI_MEMORY_MANAGED_SESSION": "1"} if managed else None,
         )
         return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
     except subprocess.TimeoutExpired:
@@ -231,36 +238,13 @@ def discover_host_clis() -> dict[str, Any]:
     rc, cver, _ = _run_cmd(["claude", "--version"], timeout=10)
     claude_installed = rc == 0
     claude_ver = cver.splitlines()[0].strip() if claude_installed and cver else None
-    if claude_installed:
-        for mid, label in [
-            ("claude-sonnet-4-6", "Claude Code — Sonnet (CLI default)"),
-            ("claude-opus-4-6", "Claude Code — Opus (CLI)"),
-        ]:
-            models.append(
-                {
-                    "provider": "claude",
-                    "model_id": mid,
-                    "cli_family": "claude",
-                    "cli_version": claude_ver,
-                    "auth_mode": "subscription_cli",
-                    "status": "candidate",
-                    "capabilities": {
-                        "verification_stage": "cli_available",
-                        "display_name": label,
-                        "noninteractive": True,
-                        "retiring_soon": False,
-                    },
-                    "source_url": "local://claude/cli",
-                    "verified_at": now,
-                }
-            )
     clis.append(
         {
             "cli_name": "claude",
             "installed": claude_installed,
             "version": claude_ver,
             "auth_mode": "subscription_cli",
-            "verified_model_ids": ["claude-sonnet-4-6", "claude-opus-4-6"] if claude_installed else [],
+            "verified_model_ids": [],
             "verified_at": now,
         }
     )
@@ -269,32 +253,13 @@ def discover_host_clis() -> dict[str, Any]:
     rc, xver, _ = _run_cmd(["codex", "--version"], timeout=10)
     codex_installed = rc == 0
     codex_ver = xver.splitlines()[0].strip() if codex_installed and xver else None
-    if codex_installed:
-        models.append(
-            {
-                "provider": "codex",
-                "model_id": "codex-default",
-                "cli_family": "codex",
-                "cli_version": codex_ver,
-                "auth_mode": "subscription_cli",
-                "status": "candidate",
-                "capabilities": {
-                    "verification_stage": "cli_available",
-                    "display_name": "Codex CLI (Default model)",
-                    "noninteractive": True,
-                    "retiring_soon": False,
-                },
-                "source_url": "local://codex/cli",
-                "verified_at": now,
-            }
-        )
     clis.append(
         {
             "cli_name": "codex",
             "installed": codex_installed,
             "version": codex_ver,
             "auth_mode": "subscription_cli",
-            "verified_model_ids": ["codex-default"] if codex_installed else [],
+            "verified_model_ids": [],
             "verified_at": now,
         }
     )
@@ -413,6 +378,9 @@ def probe_model(
             "checked_at": now,
         }
 
+    if mode != "trial_run" and cli != "agy":
+        return {"ok": True, "stage": "cli_installed", "message": "CLI đã cài. Model chưa được chạy thử.", "checked_at": now}
+
     if mode != "trial_run":
         return {
             "ok": True,
@@ -434,16 +402,16 @@ def probe_model(
     t0 = time.perf_counter()
     prompt = "Reply strictly with the single word OK."
     if cli == "agy":
-        rc, out, err = _run_cmd(["agy", "--model", model_id, "--print", prompt], timeout=60)
+        rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--print", prompt], timeout=60)
     elif cli == "claude":
-        rc, out, err = _run_cmd(["claude", "-p", "--model", model_id, prompt], timeout=60)
+        rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--model", model_id, prompt], timeout=60)
     elif cli == "codex":
-        rc, out, err = _run_cmd(["codex", "exec", prompt], timeout=60)
+        rc, out, err = _run_cmd(["codex", "exec", "--sandbox", "read-only", "--model", model_id, prompt], timeout=60)
     else:
         return {"ok": False, "stage": "unavailable", "message": f"Unsupported CLI: {cli}", "checked_at": now}
 
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
-    ok = rc == 0 and bool(out)
+    ok = rc == 0 and out.strip().upper() == "OK"
     excerpt = (out or err)[:300]
 
     # Record observed evaluation in Memory Bridge so catalog upgrades model to execution_verified
@@ -464,7 +432,7 @@ def probe_model(
         }
         if project_id:
             eval_body["project_id"] = project_id
-        _bridge_request(env, "POST", "/v2/evaluations", token_key="BRIDGE_ADMIN_TOKEN", body=eval_body)
+        _bridge_request(env, "POST", "/v2/evaluations", token_key="BRIDGE_PLANNER_TOKEN", body=eval_body)
 
     return {
         "ok": ok,
@@ -502,6 +470,7 @@ def execute_approved_plan(
             "worktree_id": worktree_id,
             "runner_id": runner_id,
             "lease_seconds": 300,
+            "plan_id": plan_id,
         },
     )
     if code != 200 or not claim.get("claimed"):
@@ -515,12 +484,12 @@ def execute_approved_plan(
     job_id = claim.get("job_id") or claim.get("task_id")
     lease_id = claim["lease_id"]
     session_id = claim.get("session_id")
-    provider = claim.get("provider") or "agy"
-    model_id = claim.get("model_id") or "claude-sonnet-5-5-low"
+    provider = claim.get("provider")
+    model_id = claim["model_id"]
     effort = claim.get("effort")
     auth_mode = claim.get("auth_mode") or "subscription_cli"
     objective = (claim.get("context_pack") or {}).get("objective") or "Summarize task"
-    effective_wt_path = worktree_path or claim.get("worktree_path")
+    effective_wt_path = claim.get("worktree_path")
 
     t0 = time.perf_counter()
     prompt = (
@@ -528,19 +497,86 @@ def execute_approved_plan(
         f"Objective: {objective}\n"
         f"Constraint: Read-only analysis only. Reply concisely in Vietnamese (<= 4 bullet points)."
     )
-    cwd = effective_wt_path if (effective_wt_path and Path(effective_wt_path).is_dir()) else str(HUB_ROOT)
-    if provider == "local" or model_id == "deterministic-rules":
-        rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
-    elif provider == "claude":
-        rc, out, err = _run_cmd(["claude", "-p", "--model", model_id, prompt], cwd=cwd, timeout=90)
-    elif provider == "codex":
-        rc, out, err = _run_cmd(["codex", "exec", prompt], cwd=cwd, timeout=90)
-    else:
-        rc, out, err = _run_cmd(["agy", "--model", model_id, "--print", prompt], cwd=cwd, timeout=90)
+    stop = threading.Event()
+    heartbeat = {"project_id": project_id, "lease_id": lease_id, "runner_id": runner_id, "lease_seconds": 300}
 
+    lost = threading.Event()
+
+    def keep_alive():
+        while not stop.wait(12):
+            status, _ = _bridge_request(env, "POST", f"/v2/jobs/{job_id}/heartbeat",
+                token_key="BRIDGE_RUNNER_TOKEN", body=heartbeat, timeout=5)
+            if status != 200:
+                lost.set()
+                break
+
+    status, _ = _bridge_request(env, "POST", f"/v2/jobs/{job_id}/heartbeat",
+        token_key="BRIDGE_RUNNER_TOKEN", body=heartbeat)
+    if status != 200:
+        return {"ok": False, "job_id": job_id, "message": "Lease unavailable before CLI start"}
+    worker = threading.Thread(target=keep_alive, daemon=True)
+    worker.start()
+    trace_started = datetime.now(timezone.utc)
+    invoked = False
+    local = False
+    try:
+        cwd = effective_wt_path
+        if not cwd or not Path(cwd).is_dir():
+            rc, out, err = 1, "", "Registered worktree unavailable"
+        elif provider == "local" or model_id == "deterministic-rules":
+            invoked = local = True
+            rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
+        elif auth_mode != "subscription_cli":
+            rc, out, err = 1, "", "Non-subscription dispatch disabled"
+        elif provider == "claude":
+            invoked = True
+            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
+        elif provider == "codex":
+            invoked = True
+            rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
+        elif provider == "agy" and auth_mode == "subscription_cli":
+            invoked = True
+            rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--output-format", "json", "--print", prompt], cwd=cwd, timeout=90, managed=True)
+        else:
+            rc, out, err = 1, "", "Unsupported approved CLI adapter"
+    finally:
+        stop.set()
+        worker.join(timeout=6)
+
+    if invoked:
+        try:
+            from services.orchestrator.dispatch.trace_execution import build_execution_trace
+            payload = build_execution_trace(claim,trace_started,datetime.now(timezone.utc),local=local,
+                status="unknown" if lost.is_set() else ("succeeded" if rc==0 else "failed"),
+                error_code=None if rc==0 else f"cli_exit_{rc}",stdout=out)
+            if payload:
+                _bridge_request(env,"POST","/v2/traces",token_key="BRIDGE_RUNNER_TOKEN",body=payload)
+        except Exception:
+            pass
+    if lost.is_set():
+        return {"ok": False, "job_id": job_id, "session_id": session_id, "message": "Heartbeat lost; outcome unknown. Inspect before retry."}
     duration_ms = int((time.perf_counter() - t0) * 1000)
-    succeeded = rc == 0 and bool(out)
-    summary = (out or err or "No output")[:3500]
+    quota_error = re.search(r"(?i)(?:quota exceeded|rate.limit exceeded|resource.exhausted|quota will reset)", (err or out)[:2000])
+    succeeded = rc == 0 and bool(out) and not quota_error
+    # Use the same parser as the polling runner. A telemetry failure must
+    # not trigger another CLI invocation or prevent lease completion.
+    usage_status = None
+    summary = "No structured result available."
+    try:
+        from services.orchestrator.dispatch.cli_runner import parse_cli_telemetry, redact_summary
+        counters, _, summary = parse_cli_telemetry(cli_family=str(provider), stdout=out)
+        if not summary:
+            summary = redact_summary(err or "No output")
+        if session_id:
+            usage_status, _ = _bridge_request(
+                env, "POST", "/v2/usage", token_key="BRIDGE_RUNNER_TOKEN",
+                body={"source_event_id": f"{session_id}:final", "session_id": session_id,
+                      "project_id": project_id, "worktree_id": worktree_id,
+                      "sequence_no": 1, "usage": counters.model_dump(mode="json")},
+            )
+    except Exception:
+        usage_status = 503
+
 
     # Complete job on Memory Bridge (Bridge updates task, session & plan status atomically)
     cc, comp_resp = _bridge_request(
@@ -552,38 +588,14 @@ def execute_approved_plan(
             "project_id": project_id,
             "lease_id": lease_id,
             "outcome": "succeeded" if succeeded else "failed",
-            "accepted": succeeded,
-            "tests_passed": succeeded,
+            "accepted": None,
+            "tests_passed": None,
             "duration_ms": duration_ms,
             "handoff_summary": summary,
-            "error_code": None if succeeded else f"cli_exit_{rc}",
-            "error_summary": None if succeeded else (err[:500] or f"Exit code {rc}"),
+            "error_code": None if succeeded else ("quota_exceeded" if quota_error else f"cli_exit_{rc}"),
+            "error_summary": None if succeeded else f"Exit code {rc}",
         },
     )
-
-    if succeeded:
-        _bridge_request(
-            env,
-            "POST",
-            "/v2/evaluations",
-            token_key="BRIDGE_ADMIN_TOKEN",
-            body={
-                "project_id": project_id,
-                "model_id": model_id,
-                "provider": provider,
-                "auth_mode": auth_mode,
-                "effort": effort,
-                "task_type": "routine",
-                "complexity": "S",
-                "evidence_kind": "observed",
-                "correctness_score": 1.0,
-                "acceptance_rate": 1.0,
-                "avg_latency_ms": float(duration_ms),
-                "failure_rate": 0.0,
-                "sample_count": 1,
-                "provenance": {"source": "host_brain_agent_plan", "plan_id": plan_id, "job_id": job_id},
-            },
-        )
 
     return {
         "ok": succeeded and cc == 200,
@@ -593,8 +605,9 @@ def execute_approved_plan(
         "model_id": model_id,
         "duration_ms": duration_ms,
         "exit_code": rc,
-        "output": summary,
+        "message": "Kết quả đã lưu trong lịch sử" if cc == 200 else "Chưa xác nhận lưu kết quả",
         "complete_response": comp_resp,
+        "telemetry_status": usage_status,
     }
 
 

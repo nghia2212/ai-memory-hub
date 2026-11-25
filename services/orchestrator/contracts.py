@@ -150,7 +150,7 @@ class TaskForecast(StrictV2Model):
 class PlanTaskSpec(StrictV2Model):
     task_key: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=200)
-    objective: str = Field(min_length=1, max_length=4000)
+    objective: str = Field(min_length=1, max_length=32000)
     dependencies: list[str] = Field(default_factory=list)
     owned_paths: list[str] = Field(default_factory=list)
     acceptance_checks: list[str] = Field(default_factory=list)
@@ -169,7 +169,7 @@ class PlanTaskSpec(StrictV2Model):
 class PlanCreateRequest(StrictV2Model):
     project_id: UUID
     worktree_id: UUID
-    objective: str = Field(min_length=1, max_length=4000)
+    objective: str = Field(min_length=1, max_length=32000)
     catalog_snapshot_id: str | None = None
     tasks: list[PlanTaskSpec] = Field(min_length=1, max_length=50)
     forecast_id: str | None = None
@@ -190,7 +190,7 @@ class BrainRequest(StrictV2Model):
     project_id: UUID
     worktree_id: UUID
     role: BrainRole
-    objective: str = Field(min_length=1, max_length=4000)
+    objective: str = Field(min_length=1, max_length=32000)
     context_pack: dict[str, Any] = Field(default_factory=dict)
     max_output_tokens: int = Field(default=1024, ge=64, le=8192)
     timeout_seconds: float = Field(default=30.0, ge=1.0, le=180.0)

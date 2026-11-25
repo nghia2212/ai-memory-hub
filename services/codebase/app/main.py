@@ -5,7 +5,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from .auth import verify_bearer
+from .trace_ops import trace_parent
 from .cbm_client import CBMBackend, StdioCBMClient
 from .config import Settings
 from .models import (
@@ -80,6 +81,14 @@ def create_app(
         store.close()
 
     app = FastAPI(title="AI Memory Hub Codebase Adapter", version="1.0.0", lifespan=lifespan)
+    @app.middleware("http")
+    async def trace_context(request: Request, call_next):
+        token = trace_parent.set(request.headers.get("X-Trace-Parent"))
+        try:
+            return await call_next(request)
+        finally:
+            trace_parent.reset(token)
+
     app.state.settings = cfg
     app.state.store = store
     app.state.registry = reg
@@ -142,6 +151,13 @@ def create_app(
     @app.post("/v1/search/code", response_model=SearchCodeResponse, response_model_exclude_none=True)
     async def post_search_code(req: SearchCodeRequest, _auth=Depends(require_read)) -> SearchCodeResponse:
         return await service.search_code(req)
+
+    @app.get("/v1/explorer/{view}")
+    async def explore(view: Literal["tree", "source", "index", "outline", "graph"],
+                      project_id: UUID, worktree_id: UUID, path: str = Query("", max_length=512),
+                      symbol: str = Query("", max_length=512), offset: int = Query(0, ge=0, le=10000),
+                      line: int = Query(1, ge=1), depth: int = Query(1, ge=1, le=3), _auth=Depends(require_read)):
+        return await service.explore(project_id, worktree_id, view, path, symbol, offset, line, depth)
 
     @app.post("/mcp")
     async def mcp_endpoint(rpc: JsonRpcRequest, _auth=Depends(require_read)) -> JSONResponse:

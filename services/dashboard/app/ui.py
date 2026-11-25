@@ -130,12 +130,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       padding: 10px 16px; border-radius: 8px; display: none; z-index: 100;
     }
   </style>
+  <link rel="stylesheet" href="/workbench.css">
+  <script defer src="/workbench.js"></script>
+  <script defer src="/execution-map.js"></script>
 </head>
 <body>
   <header>
     <div>
-      <h1>AI Memory Hub — Quản trị V1</h1>
-      <small style="color:var(--muted)">Chế độ mặc định: Chỉ đọc (Read-only). Thao tác ghi cần đăng nhập quản trị.</small>
+      <h1>AI Memory Hub <small>Workbench 2.1-dev</small></h1>
+      <button class="secondary" id="nav-toggle" aria-expanded="true" aria-controls="navigation">☰ Danh mục</button>
     </div>
     <div class="row-actions">
       <span id="auth-status" class="badge warn">Chưa đăng nhập</span>
@@ -145,20 +148,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </header>
 
-  <nav>
-    <button class="active" onclick="showTab('overview', this)">Tổng quan</button>
-    <button onclick="showTab('projects', this)">Dự án & Worktree</button>
-    <button onclick="showTab('code', this)">Tìm mã nguồn</button>
-    <button onclick="showTab('memory', this)">Duyệt bộ nhớ</button>
-    <button onclick="showTab('handoffs', this)">Lịch sử & Handoff</button>
-    <button onclick="showTab('events', this)">Sự kiện & Kinh nghiệm</button>
-    <button onclick="showTab('hermes', this)">Cấu hình Hermes</button>
-    <button onclick="showTab('brain', this)">Bộ não điều phối</button>
-    <button onclick="showTab('plans', this)">Kế hoạch & Duyệt DAG</button>
-    <button onclick="showTab('sessions', this)">Phiên & Dự báo</button>
-    <button onclick="showTab('catalog', this)">Danh mục Model</button>
-    <button onclick="showTab('backup', this)">Sao lưu & Khôi phục</button>
-    <button onclick="showTab('metrics', this)">Thống kê & Chi phí</button>
+  <nav id="navigation" aria-label="Điều hướng">
+    <button onclick="showTab('overview', this)" class="active">Tổng quan</button>
+    <button onclick="showTab('plans', this)" >Giao công việc</button>
+    <button onclick="showTab('agents', this)" >Agent Control Center</button>
+    <button id="trace-nav" onclick="showTab('traces', this)">Bản đồ thực thi</button>
+    <button onclick="showTab('code', this)" >Codebase Explorer</button>
+    <button onclick="showTab('projects', this)" >Dự án & Worktree</button>
+    <button onclick="showTab('memory', this)" >Bộ nhớ</button>
+    <button onclick="showTab('sessions', this)" >Phiên & Dự báo</button>
+    <button onclick="showTab('brain', this)" >Bộ não điều phối</button>
+    <button onclick="showTab('catalog', this)" >Danh mục Model</button>
+    <button onclick="showTab('metrics', this)" >Token & Chi phí</button>
+    <button onclick="showTab('events', this)" >Nhật ký & Audit</button>
+    <button onclick="showTab('backup', this)" >Sao lưu & Khôi phục</button>
+    <button onclick="showTab('hermes', this)" >Cài đặt</button>
   </nav>
 
   <main>
@@ -224,6 +228,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <pre id="code-results">Chưa có truy vấn.</pre>
       </div>
+      <div class="explorer-layout"><aside class="card"><h3>Thư mục</h3><button id="tree-root" class="secondary">Mở thư mục gốc</button>
+      <p id="tree-path"></p><div id="tree-files"></div></aside><article class="card"><h3 id="source-title">Mã nguồn</h3>
+      <div id="index-meta"></div><div id="source-actions" class="row-actions"></div><pre id="source-text"></pre>
+      <div id="symbol-list"></div><label>Symbol cần trace</label><input id="graph-symbol" maxlength="512"><label>Độ sâu</label><select id="graph-depth"><option>1</option><option>2</option><option>3</option></select><button id="graph-run" class="secondary">Trace / Impact</button><div id="call-graph"></div></article></div>
+      <div class="card"><h3>So sánh worktree cùng dự án</h3><label>Worktree đối chiếu</label><select id="compare-wt"></select><button id="compare-run" class="secondary">So sánh index / file đang mở</button><div id="compare-result"></div></div>
     </section>
 
     <!-- 4. Duyệt bộ nhớ -->
@@ -268,7 +277,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </section>
 
     <!-- 6. Sự kiện & Kinh nghiệm -->
-    <section id="tab-events" class="panel">
+    <section id="tab-events" class="panel"><button class="secondary" onclick="showTab('handoffs')">Lịch sử &amp; Handoff</button>
       <div class="card" style="margin-bottom:16px">
         <h2>AI Agents kết nối (Connected AI Agents)</h2>
         <div id="agents-status-list">Chọn dự án để xem trạng thái Claude / Gemini / Codex / Hermes.</div>
@@ -352,12 +361,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </section>
 
     <!-- 7b. Kế hoạch & Duyệt DAG (V2) -->
+    <section id="tab-agents" class="panel"><h2>Agent Control Center</h2>
+      <div class="card"><div class="grid"><label>Dự án<select id="agents-proj"></select></label>
+      <label>Lọc model, trạng thái hoặc agent<input id="agent-filter" type="search"></label></div>
+      <button class="secondary" id="agent-refresh">Cập nhật</button><p id="agent-counts"></p><div id="agent-rows"></div><div id="agent-detail"></div></div>
+    </section>
     <section id="tab-plans" class="panel">
+      <h2>Giao công việc</h2><div class="work-layout"><aside class="card"><h3>Lịch sử</h3>
+      <input id="history-filter" type="search" placeholder="Tìm nhiệm vụ"><div id="plans-list"></div></aside>
+      <article class="card"><h3>Kế hoạch & Duyệt DAG</h3><div id="task-detail">Chọn nhiệm vụ trong lịch sử.</div>
+      <pre id="plan-dispatch-output" style="display:none"></pre></article>
+      <aside class="card"><h3>Phiên thực thi</h3><div id="task-meta">Chưa chọn nhiệm vụ.</div></aside></div>
       <div class="card" style="margin-bottom:16px">
-        <h2>Tạo kế hoạch từ Prompt (Phân tích &amp; Chọn model tự động)</h2>
+        <h2>Giao yêu cầu mới</h2>
         <div class="grid">
           <div><label>Dự án</label><select id="plans-proj" onchange="syncWorktrees('plans-proj','plans-wt'); loadPlans()"></select></div>
-          <div><label>Worktree</label><select id="plans-wt"></select></div>
+          <div><label>Worktree</label><select id="plans-wt" onchange="loadPlans()"></select></div>
           <div>
             <label>Độ phức tạp (để Tự động hoặc chọn)</label>
             <select id="plan-complexity">
@@ -371,16 +390,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
         <label>Prompt / Mục tiêu nhiệm vụ</label>
-        <textarea id="plan-objective" rows="2" placeholder="Ví dụ: Kiểm tra nhanh trạng thái kiến trúc module nhân vật và tóm tắt rủi ro"></textarea>
+        <textarea id="plan-objective" rows="5" placeholder="Ví dụ: Kiểm tra nhanh trạng thái kiến trúc module nhân vật và tóm tắt rủi ro"></textarea>
+        <div class="row-actions prompt-tools"><span id="plan-char-count" aria-live="polite">0 / 32.000</span><button type="button" class="secondary" id="plan-expand">Mở rộng soạn thảo</button><button type="button" class="secondary" id="plan-import">Nhập TXT / MD</button><input type="file" id="plan-file" accept=".txt,.md,.markdown" hidden><button type="button" class="secondary" id="plan-clear">Xóa bản nháp</button><span id="plan-draft-state" aria-live="polite"></span></div>
         <div class="row-actions" style="margin-top:8px">
-          <button class="primary" style="margin-top:0" onclick="analyzeAndCreatePlan()">Phân tích &amp; Tạo kế hoạch (Chờ duyệt)</button>
+          <button id="plan-submit" class="primary" style="margin-top:0" onclick="analyzeAndCreatePlan()">Phân tích &amp; Tạo kế hoạch (Chờ duyệt)</button>
           <button class="secondary" onclick="loadPlans()">Tải danh sách kế hoạch</button>
         </div>
-      </div>
-      <div class="card">
-        <h2>Kế hoạch Điều phối, Phê duyệt &amp; Khởi chạy Agent (V2)</h2>
-        <div id="plans-list" style="margin-top:12px">Chọn dự án để xem danh sách kế hoạch và trạng thái duyệt.</div>
-        <pre id="plan-dispatch-output" style="display:none;margin-top:10px"></pre>
       </div>
     </section>
 
@@ -433,9 +448,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- 9. Thống kê & Chi phí -->
     <section id="tab-metrics" class="panel">
       <div class="card">
-        <h2>Thống kê hiệu năng & Token thực tế</h2>
+        <h2>Thống kê hiệu năng & Token thực tế</h2><label>Dự án</label><select id="metrics-proj"></select>
         <button class="secondary" onclick="loadMetrics()">Làm mới số liệu</button>
         <div id="metrics-view" style="margin-top:12px"></div>
+      </div>
+    </section>
+    <section id="tab-traces" class="panel">
+      <h2>Bản đồ thực thi</h2>
+      <div class="card">
+        <div class="trace-filters">
+          <label>Dự án<select id="trace-proj"></select></label>
+          <label>Worktree<select id="trace-wt"></select></label>
+          <label>Plan ID<input id="trace-plan"></label>
+          <label>Task ID<input id="trace-task"></label>
+          <label>Session ID<input id="trace-session"></label>
+          <label>Agent ID<input id="trace-agent"></label>
+          <label>Model ID<input id="trace-model"></label>
+          <label>Trạng thái<select id="trace-status"><option value="">Tất cả</option><option>running</option><option>succeeded</option><option>failed</option><option>blocked</option><option>cancelled</option><option>unknown</option><option>unsupported</option></select></label>
+          <label>Từ giờ VN<input type="datetime-local" id="trace-from"></label>
+          <label>Đến giờ VN<input type="datetime-local" id="trace-to"></label>
+          <label>Tìm step / tool / model<input id="trace-search" maxlength="200"></label>
+          <label>Sắp xếp<select id="trace-sort"><option value="time_asc">Thời gian tăng</option><option value="time_desc">Mới nhất</option><option value="duration_desc">Lâu nhất</option><option value="status">Trạng thái</option></select></label>
+          <label>Chế độ<select id="trace-mode"><option value="graph">Graph View</option><option value="swim">Swimlane View</option><option value="timeline">Timeline View</option><option value="table">Table View</option></select></label>
+        </div>
+        <button id="trace-refresh" type="button">Tải trace</button>
+        <p id="trace-count" aria-live="polite"></p>
+        <button id="trace-prev" type="button" class="secondary">Trang trước</button>
+        <button id="trace-next" type="button" class="secondary">Trang sau</button>
+      </div>
+      <div id="trace-metrics" class="trace-metrics" aria-live="polite"></div>
+      <div class="trace-layout">
+        <div class="card trace-canvas" id="trace-view"></div>
+        <aside class="card" id="trace-detail">Chọn step để xem bằng chứng.</aside>
       </div>
     </section>
   </main>
@@ -459,6 +503,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
       document.getElementById("tab-" + name).classList.add("active");
       if (btn) btn.classList.add("active");
+      window.dispatchEvent(new CustomEvent("hub-tab", {detail:name}));
     }
 
     async function apiFetch(url, opts = {}) {
@@ -619,7 +664,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const data = await apiFetch("/api/projects");
         projectsCache = data.items || [];
-        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj"];
+        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj", "agents-proj", "metrics-proj", "trace-proj"];
         for (const sid of selects) {
           const sel = document.getElementById(sid);
           const prev = sel.value;
@@ -1033,50 +1078,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const wid = document.getElementById("plans-wt").value;
       const obj = document.getElementById("plan-objective").value.trim();
       const comp = document.getElementById("plan-complexity").value || null;
+      if (Array.from(obj).length > 32000) { toast("Prompt vượt 32.000 ký tự. Hãy rút gọn hoặc chia nhiệm vụ."); return; }
       if (!pid || !wid || !obj) { toast("Vui lòng chọn dự án, worktree và nhập Prompt"); return; }
       try {
         const res = await apiFetch("/api/v2/plans/analyze", {
           method: "POST",
           body: JSON.stringify({ project_id: pid, worktree_id: wid, objective: obj, complexity: comp })
         });
-        document.getElementById("plan-objective").value = "";
+        const editor = document.getElementById("plan-objective");
+        if (editor.value.trim() === obj && document.getElementById("plans-proj").value === pid && document.getElementById("plans-wt").value === wid) { editor.value = ""; editor.dispatchEvent(new Event("input")); }
         toast("Đã phân tích & tạo kế hoạch chờ phê duyệt (REVIEW_REQUIRED)");
         await loadPlans();
       } catch (e) { toast("Lỗi tạo kế hoạch: " + e.message); }
-    }
-
-    async function loadPlans() {
-      const pid = document.getElementById("plans-proj").value;
-      if (!pid) return;
-      try {
-        const data = await apiFetch(`/api/v2/plans?project_id=${encodeURIComponent(pid)}`);
-        const items = data.items || [];
-        if (!items.length) {
-          document.getElementById("plans-list").innerHTML = `<p style="color:var(--muted)">Chưa có kế hoạch V2 nào cho dự án này.</p>`;
-          return;
-        }
-        let html = "<table><tr><th>Mục tiêu &amp; Model chọn</th><th>Trạng thái</th><th>Revision</th><th>Hành động</th></tr>";
-        for (const p of items) {
-          const detail = await apiFetch(`/api/v2/plans/${p.id}?project_id=${encodeURIComponent(pid)}`);
-          const curRev = (detail.revisions || [])[0];
-          const revHash = curRev ? curRev.revision_hash : "";
-          const firstTask = (detail.tasks || [])[0];
-          const modelInfo = firstTask ? `<code>${firstTask.assigned_provider}/${firstTask.assigned_model_id}</code>` : "";
-          const approveBtn = p.status === "REVIEW_REQUIRED" && curRev
-            ? `<button class="primary" style="margin:0" onclick="planAction('${p.id}','approve','${curRev.id}','${revHash}')">Phê duyệt</button>`
-            : "";
-          const dispatchBtn = p.status === "APPROVED"
-            ? `<button class="primary" style="margin:0" onclick="dispatchPlan('${p.id}','${p.worktree_id}')">Khởi chạy Agent</button>`
-            : "";
-          const pauseBtn = p.status === "RUNNING" ? `<button class="secondary" onclick="planAction('${p.id}','pause')">Tạm dừng</button>` : "";
-          const resumeBtn = p.status === "PAUSED" ? `<button class="secondary" onclick="planAction('${p.id}','resume')">Tiếp tục</button>` : "";
-          const cancelBtn = !["COMPLETED","CANCELLED","REJECTED"].includes(p.status)
-            ? `<button class="secondary" onclick="planAction('${p.id}','cancel')">Hủy</button>` : "";
-          html += `<tr><td><strong>${p.objective}</strong><br/><small>${(detail.tasks||[]).length} tác vụ · ${modelInfo}</small></td><td><span class="badge">${p.status}</span></td><td><code>${(p.current_revision_id||"").slice(0,8)}</code></td><td class="row-actions">${approveBtn}${dispatchBtn}${pauseBtn}${resumeBtn}${cancelBtn}</td></tr>`;
-        }
-        html += "</table>";
-        document.getElementById("plans-list").innerHTML = html;
-      } catch (e) { toast(e.message); }
     }
 
     async function dispatchPlan(planId, worktreeId) {
@@ -1089,7 +1102,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           method: "POST",
           body: JSON.stringify({ worktree_id: worktreeId })
         });
-        outEl.textContent = JSON.stringify(res, null, 2);
+        outEl.textContent = res.message || "Đã nhận phản hồi từ runner.";
         toast(res.ok ? "Agent thực thi hoàn tất!" : "Agent thực thi thất bại");
         await Promise.all([loadPlans(), loadSessions(), loadCatalog()]);
       } catch (e) {
@@ -1181,12 +1194,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await loadOverview();
       await loadHermesPanel();
       await loadProjects();
-      await loadBrainPanel();
-      await loadPlans();
-      await loadSessions();
-      await loadCatalog();
-      await loadBackups();
-      await loadMetrics();
+      window.dispatchEvent(new Event("hub-ready"));
     });
   </script>
 </body>

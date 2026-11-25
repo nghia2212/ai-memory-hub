@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 
 from .config import Settings
+from .errors import BridgeError
 from .security import AuthPrincipal, authenticate_token, extract_bearer_token, require_any_scope, require_scope
 from .v2_schemas import (
     BrainConfigUpdateRequest,
@@ -203,7 +204,9 @@ def create_v2_router(service: V2BridgeService, cfg: Settings) -> APIRouter:
         )
 
     @router.post("/sessions", status_code=201)
-    async def upsert_session(req: SessionUpsertRequest, _: AuthPrincipal = Depends(req_telemetry_writer)) -> dict[str, Any]:
+    async def upsert_session(req: SessionUpsertRequest, p: AuthPrincipal = Depends(req_telemetry_writer)) -> dict[str, Any]:
+        if p.role == "write" and (req.role != "manual_cli" or any((req.plan_id, req.plan_revision_id, req.task_id, req.attempt_id, req.parent_session_id))):
+            raise BridgeError(403, "manual_scope_required", "Write token may only register unlinked manual sessions")
         return service.upsert_session(req)
 
     @router.get("/sessions/{session_id}")

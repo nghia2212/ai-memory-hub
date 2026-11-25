@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .config import HermesConfig
+from .trace_provider import emit, now
 
 SYSTEM_PROMPT = (
     "You summarize pre-redacted development metadata events into a concise candidate memory. "
@@ -137,6 +138,7 @@ class OpenAICompatibleProvider:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
         last_error: Exception | None = None
+        retry_of = None
         for attempt in range(self.max_retries + 1):
             req = urllib.request.Request(
                 self.endpoint_url,
@@ -144,17 +146,22 @@ class OpenAICompatibleProvider:
                 headers=headers,
                 method="POST",
             )
+            started = now()
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
                     resp_data = json.loads(resp.read().decode("utf-8"))
-                return self._extract_result(resp_data, event_kind)
+                result = self._extract_result(resp_data, event_kind)
+                emit(self.provider_name,self.model,started,response=resp_data,retry_of=retry_of)
+                return result
             except urllib.error.HTTPError as exc:
+                retry_of = emit(self.provider_name,self.model,started,error=exc,retry_of=retry_of)
                 last_error = exc
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                     time.sleep(min(2.0**attempt, 4.0))
                     continue
                 raise ProviderError(f"{self.provider_name} HTTP error: {exc.code}") from exc
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                retry_of = emit(self.provider_name,self.model,started,error=exc,retry_of=retry_of)
                 last_error = exc
                 if attempt < self.max_retries:
                     time.sleep(min(2.0**attempt, 4.0))

@@ -1,7 +1,9 @@
 """FastAPI + FastMCP ASGI entrypoint for Memory Bridge V1."""
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 from uuid import UUID
 
@@ -32,6 +34,8 @@ from .schemas import (
 from .security import AuthPrincipal, authenticate_token, current_mcp_principal, extract_bearer_token, require_scope
 from .service import MemoryBridgeService
 from .v2_routes import create_v2_router
+from .trace_routes import create_trace_router
+from .trace_operations import trace_parent, trace_transport
 from .v2_service import V2BridgeService
 
 
@@ -45,7 +49,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def bridge_lifespan(_app: FastAPI):
         db.initialize()
-        yield
+
+        async def sweep_leases():
+            while True:
+                await asyncio.sleep(15)
+                try:
+                    await asyncio.to_thread(db.reconcile_expired_leases)
+                except Exception:
+                    logging.getLogger(__name__).exception("Lease reconciliation failed")
+
+        sweeper = asyncio.create_task(sweep_leases())
+        try:
+            yield
+        finally:
+            sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweeper
 
     app = FastAPI(
         title="AI Memory Hub - Memory Bridge V1",
@@ -58,6 +77,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_exception_handler(BridgeError, bridge_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+
+    @app.middleware("http")
+    async def trace_context_middleware(request: Request, call_next):
+        # Explicit caller correlation only; no guessing from active sessions.
+        token = trace_parent.set(request.headers.get("X-Trace-Parent"))
+        transport = trace_transport.set("mcp" if request.url.path == "/mcp" or request.url.path.startswith("/mcp/") else "http")
+        try:
+            return await call_next(request)
+        finally:
+            trace_transport.reset(transport)
+            trace_parent.reset(token)
 
     @app.middleware("http")
     async def mcp_auth_middleware(request: Request, call_next):
@@ -212,6 +242,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         return service.verify_memory(str(memory_id), req)
 
+    @app.get("/v1/context")
+    def project_context(project_id: UUID, worktree_id: UUID, _: AuthPrincipal = Depends(require_read)):
+        return service.get_project_context(str(project_id), str(worktree_id))
+
     # --- Events & Handoffs ---
     @app.get("/v1/events")
     async def list_events(
@@ -302,6 +336,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     v2_service = V2BridgeService(db=db)
     app.state.v2_service = v2_service
     app.include_router(create_v2_router(v2_service, cfg))
+    app.include_router(create_trace_router(db, cfg))
 
     # Mount FastMCP Streamable HTTP app at /mcp
     app.mount("/mcp", mcp_app)

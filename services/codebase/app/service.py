@@ -13,7 +13,10 @@ from typing import Any
 from fastapi import HTTPException
 
 from .cbm_client import CBMBackend, CBMClientError
+from .trace_ops import scoped, emit
+from datetime import datetime, timezone
 from .config import Settings
+from .explorer import directory_page, safe_entry, source_page, trace_edges
 from .models import (
     IndexJobResponse,
     IndexRequest,
@@ -148,6 +151,47 @@ class CodebaseService:
                 ) from exc
         return entry
 
+    @scoped
+    async def explore(self, project_id, worktree_id, view, path, symbol, offset, line, depth):
+        entry = await self._require_worktree(project_id, worktree_id)
+        root = Path(entry.container_root)
+        project = cbm_project_name(project_id, worktree_id)
+        snapshot = self._store.get_snapshot(project)
+        current = await self._inspect_git_cached(project, root, entry)
+        fresh = snapshot and snapshot["head_commit"] == current.head_commit and snapshot["dirty_fingerprint"] == current.dirty_fingerprint
+        info = {"index": snapshot, "head": current.head_commit, "branch": current.branch,
+                "freshness": ("fresh" if fresh else "stale") if snapshot else "unindexed"}
+        if view == "index":
+            return {**info, "active_job": self._store.get_active_job(str(project_id), str(worktree_id))}
+        if view == "tree":
+            started = datetime.now(timezone.utc)
+            try:
+                data = await asyncio.to_thread(directory_page, root, path, entry.exclude, offset, 80)
+            except Exception as exc:
+                await emit("get_tree", started, exc, mcp=False)
+                raise
+            else:
+                await emit("get_tree", started, mcp=False)
+        elif view == "source":
+            data = await asyncio.to_thread(source_page, root, path, entry.exclude, line)
+        elif view == "outline":
+            if not snapshot:
+                raise HTTPException(409, "Worktree has no index")
+            safe_entry(root, path, entry.exclude)
+            data = await self._cbm.call_tool("get_file_outline", {"project": project, "file_path": path,
+                                             "limit": 60, "offset": offset, "format": "json"}, timeout=12)
+        else:
+            if not snapshot:
+                raise HTTPException(409, "Worktree has no index")
+            if not symbol.strip():
+                raise HTTPException(422, "Symbol required")
+            data = await self._cbm.call_tool("trace_path", {"project": project, "function_name": symbol,
+                "depth": depth, "direction": "both", "format": "json", "limit": 30,
+                "max_output_tokens": 2600, "include_tests": True, "include_evidence": True}, timeout=12)
+        if view == "graph":
+            return {**data, **info, "graph_edges": trace_edges(data, root, entry.exclude), "graph_source": "cbm trace_path"}
+        return {**data, **info}
+
     def _row_to_job_response(self, row: dict[str, Any], *, deduplicated: bool = False) -> IndexJobResponse:
         return IndexJobResponse(
             job_id=row["job_id"],
@@ -166,6 +210,7 @@ class CodebaseService:
             updated_at=row["updated_at"],
         )
 
+    @scoped
     async def trigger_index(self, req: IndexRequest) -> IndexJobResponse:
         entry = await self._require_worktree(req.project_id, req.worktree_id)
         cbm_project = cbm_project_name(req.project_id, req.worktree_id)
@@ -258,6 +303,7 @@ class CodebaseService:
             )
         return self._row_to_job_response(row)
 
+    @scoped
     async def search_code(self, req: SearchCodeRequest) -> SearchCodeResponse:
         started = time.perf_counter()
         entry = await self._require_worktree(req.project_id, req.worktree_id)

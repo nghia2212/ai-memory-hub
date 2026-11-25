@@ -1,6 +1,11 @@
 """FastAPI server-side proxy and Vietnamese Dashboard for AI Memory Hub V1."""
 from __future__ import annotations
 
+import asyncio
+import json
+import re
+from pathlib import Path
+from uuid import UUID
 import hmac
 from typing import Any
 
@@ -28,7 +33,7 @@ class LoginRequest(BaseModel):
 
 def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     cfg = settings or load_dashboard_settings()
-    app = FastAPI(title="AI Memory Hub - Vietnamese Dashboard", version="1.0.0")
+    app = FastAPI(title="AI Memory Hub - Vietnamese Dashboard", version="2.1.0-dev")
     app.state.settings = cfg
 
     async def _probe_health(url: str) -> dict[str, Any]:
@@ -183,10 +188,11 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         path: str,
         *,
         use_admin: bool = False,
+        planner: bool = False,
         json_body: Any = None,
         params: dict[str, Any] | None = None,
     ) -> JSONResponse:
-        token = cfg.bridge_admin_token if use_admin else (cfg.bridge_read_token or cfg.bridge_admin_token)
+        token = cfg.bridge_planner_token if planner else cfg.bridge_admin_token if use_admin else cfg.bridge_read_token
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         url = f"{cfg.bridge_url.rstrip('/')}{path}"
         try:
@@ -199,6 +205,31 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 status_code=503,
                 content={"error": {"code": "bridge_unavailable", "message": "Memory Bridge unavailable"}},
             )
+
+    @app.get("/execution-map.js")
+    def execution_map_js():
+        return Response(Path(__file__).with_name("execution-map.js").read_bytes(), media_type="application/javascript")
+
+    @app.get("/api/v2/traces")
+    async def api_traces(request: Request):
+        if not verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret):
+            raise HTTPException(401, "Session required")
+        allowed = {"project_id","worktree_id","plan_id","task_id","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
+        return await _proxy_bridge("GET","/v2/traces",params={k:v for k,v in request.query_params.items() if k in allowed})
+
+    @app.get("/api/v2/traces/{trace_id}")
+    async def api_trace_detail(trace_id: UUID, project_id: UUID, request: Request):
+        if not verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret):
+            raise HTTPException(401, "Session required")
+        return await _proxy_bridge("GET",f"/v2/traces/{trace_id}",params={"project_id":str(project_id)})
+
+    @app.get("/workbench.js")
+    def workbench_js():
+        return Response(Path(__file__).with_name("workbench.js").read_bytes(), media_type="application/javascript")
+
+    @app.get("/workbench.css")
+    def workbench_css():
+        return Response(Path(__file__).with_name("workbench.css").read_bytes(), media_type="text/css")
 
     @app.get("/livez")
     async def livez() -> dict[str, Any]:
@@ -334,10 +365,12 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         return await _proxy_bridge("GET", f"/v1/projects/{project_id}/worktrees")
 
     @app.get("/api/memories")
-    async def api_memories(project_id: str, state: str = "") -> JSONResponse:
+    async def api_memories(project_id: str, state: str = "", worktree_id: str | None = None) -> JSONResponse:
         params: dict[str, Any] = {"project_id": project_id}
         if state:
             params["state"] = state
+        if worktree_id:
+            params["worktree_id"] = worktree_id
         return await _proxy_bridge("GET", "/v1/memories", params=params)
 
     @app.get("/api/events")
@@ -370,6 +403,18 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         verify_origin(request, cfg)
         body = await request.json()
         return await _proxy_bridge("POST", "/v1/search/memory", json_body=body)
+
+    @app.get("/api/explorer/{view}")
+    async def explorer(view: str, request: Request):
+        if view not in {"tree", "source", "index", "outline", "graph"}:
+            raise HTTPException(404, "Unknown explorer view")
+        try:
+            async with httpx.AsyncClient(timeout=45) as client:
+                reply = await client.get(f"{cfg.codebase_url}/v1/explorer/{view}",
+                    headers={"Authorization": f"Bearer {cfg.codebase_read_token}"}, params=request.query_params)
+                return JSONResponse(reply.json(), status_code=reply.status_code)
+        except (httpx.HTTPError, ValueError):
+            raise HTTPException(503, "Codebase Adapter unavailable")
 
     @app.post("/api/search/code")
     async def api_search_code(request: Request) -> JSONResponse:
@@ -544,6 +589,9 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 detail={"error": {"code": "invalid_input", "message": "Cần project_id, worktree_id và objective"}},
             )
 
+        if len(objective) > 32000:
+            raise HTTPException(422, "Prompt tối đa 32000 ký tự; hãy chia nhiệm vụ hoặc dùng tham chiếu tài liệu.")
+
         # Heuristic complexity/task_type classification if not provided
         low_obj = objective.lower()
         task_type = body.get("task_type")
@@ -569,33 +617,49 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             else:
                 complexity = "L"
 
-        role_name = "tier1_light" if complexity in {"XS", "S"} else ("tier2_primary" if complexity == "M" else "tier3_advanced")
-        # Fetch project's effective Brain config from Bridge
-        brain_resp = await _proxy_bridge("GET", "/v2/brain/config", params={"project_id": project_id})
-        brain_data = {}
-        try:
-            import json as _json
-            brain_data = _json.loads(brain_resp.body.decode("utf-8"))
-        except Exception:
-            brain_data = {}
-        roles = {r.get("role_name"): r for r in brain_data.get("roles", [])}
-        chosen = roles.get(role_name) or roles.get("tier2_primary") or {}
-        provider = chosen.get("effective_provider") or "agy"
-        model_id = chosen.get("effective_model_id") or "claude-sonnet-5-5-medium"
-        effort = chosen.get("effective_effort") or "medium"
-        auth_mode = chosen.get("auth_mode") or "subscription_cli"
-
-        # Never auto-select paid api_key unless explicitly allowed
-        if auth_mode == "api_key" and not brain_data.get("allow_paid_api_fallback", False):
-            provider = "agy"
-            model_id = "claude-sonnet-5-5-medium"
-            effort = "medium"
-            auth_mode = "subscription_cli"
-
+        routing = await _proxy_bridge("POST", "/v2/routing/recommend", planner=True,
+            json_body={"project_id": project_id, "task_type": task_type, "complexity": complexity,
+                       "allowed_auth_modes": ["subscription_cli"]})
+        if routing.status_code != 200:
+            return routing
+        chosen = json.loads(routing.body)
+        provider = chosen["provider"]
+        model_id = chosen["model_id"]
+        effort = chosen.get("effort")
+        auth_mode = chosen["auth_mode"]
+        catalog = await _proxy_bridge("GET", "/v2/catalog")
+        if catalog.status_code != 200:
+            return catalog
+        catalog_data = json.loads(catalog.body)
+        if auth_mode != "subscription_cli" or catalog_data.get("is_stale"):
+            raise HTTPException(409, "Verified subscription CLI required")
+        scope = {"project_id": project_id, "worktree_id": worktree_id}
+        terms = re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", objective)
+        code_term = str(body.get("symbol") or next((t for t in terms if any(c.isupper() for c in t[1:])), objective[:100]))[:180]
+        memory_term = str(body.get("memory_query") or objective[:100])
+        context, code, memory = await asyncio.gather(
+            _proxy_bridge("GET", "/v1/context", params=scope),
+            _proxy_bridge("POST", "/v1/search/code", json_body={**scope, "query": code_term, "limit": 5}),
+            _proxy_bridge("POST", "/v1/search/memory", json_body={**scope, "query": memory_term[:180], "limit": 3}),
+        )
+        if context.status_code != 200:
+            return context
+        code_refs = json.loads(code.body).get("items", []) if code.status_code == 200 else []
+        mem_refs = json.loads(memory.body).get("items", []) if memory.status_code == 200 else []
+        if not mem_refs:
+            mem_refs = json.loads(context.body).get("items", [])[:3]
+        refs = [f"{r['path']}:{r['line_start']} {r['title']}" for r in code_refs]
+        refs.extend(f"Memory {m['id']}: {m['title']}" for m in mem_refs)
+        # Preserve the complete user objective; only optional references may be omitted.
+        task_objective = objective
+        for ref in refs:
+            suffix = ("\nTham chiếu đã tra cứu:\n" if task_objective == objective else "\n") + ref
+            if len(task_objective) + len(suffix) <= 32000:
+                task_objective += suffix
         task_spec = {
             "task_key": "T1",
             "title": objective[:120],
-            "objective": objective,
+            "objective": task_objective,
             "dependencies": [],
             "owned_paths": [],
             "acceptance_checks": ["Báo cáo tóm tắt có bằng chứng kiểm tra thực tế"],
@@ -603,8 +667,7 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 "rubric_version": "v2.0",
                 "task_type": task_type,
                 "complexity": complexity,
-                "file_count": 1,
-                "total_file_bytes": 4096,
+                "file_count": len({r["path"] for r in code_refs}),
                 "expected_edits": 0,
                 "expected_tests": 1,
                 "dependency_count": 0,
@@ -623,7 +686,13 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             "objective": objective,
             "tasks": [task_spec],
         }
-        created = await _proxy_bridge("POST", "/v2/plans", use_admin=True, json_body=plan_payload)
+        forecast = await _proxy_bridge("POST", "/v2/forecasts", planner=True,
+                                       json_body={**scope, "tasks": [task_spec], "persist": True})
+        if forecast.status_code != 200:
+            return forecast
+        plan_payload["forecast_id"] = json.loads(forecast.body)["forecast_id"]
+        plan_payload["catalog_snapshot_id"] = catalog_data["snapshot_id"]
+        created = await _proxy_bridge("POST", "/v2/plans", planner=True, json_body=plan_payload)
         return created
 
     @app.post("/api/v2/plans/{plan_id}/dispatch")
@@ -637,7 +706,6 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 "project_id": project_id,
                 "worktree_id": body.get("worktree_id", ""),
                 "plan_id": plan_id,
-                "worktree_path": body.get("worktree_path"),
             },
             timeout=105.0,
         )
@@ -664,6 +732,34 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v2_plan_detail(plan_id: str, project_id: str) -> JSONResponse:
         return await _proxy_bridge("GET", f"/v2/plans/{plan_id}", params={"project_id": project_id})
 
+    @app.put("/api/v2/plans/{plan_id}/revisions")
+    async def revise_workbench_plan(plan_id: UUID, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        body = await request.json()
+        if not isinstance(body, dict) or not body.get("expected_revision_id"):
+            raise HTTPException(422, "Expected revision required")
+        project_id = str(UUID(str(body.get("project_id"))))
+        current = await _proxy_bridge("GET", f"/v2/plans/{plan_id}", params={"project_id": project_id})
+        if current.status_code != 200:
+            return current
+        detail = json.loads(current.body)
+        if detail["current_revision_id"] != body["expected_revision_id"]:
+            raise HTTPException(409, "Revision changed; reload")
+        tasks = body.get("tasks")
+        if not isinstance(tasks, list) or not 1 <= len(tasks) <= 50:
+            raise HTTPException(422, "Invalid tasks")
+        catalog = await _proxy_bridge("GET", "/v2/catalog")
+        if catalog.status_code != 200:
+            return catalog
+        cat = json.loads(catalog.body)
+        allowed = {(x.get("provider"), x.get("model_id")) for x in cat.get("models", []) if x.get("status") == "verified" and x.get("auth_mode") == "subscription_cli"}
+        if cat.get("is_stale") or any(not isinstance(t, dict) or t.get("auth_mode") != "subscription_cli" or (t.get("assigned_provider"), t.get("assigned_model_id")) not in allowed for t in tasks):
+            raise HTTPException(409, "Only verified subscription CLI models are allowed")
+        forecast = await _proxy_bridge("POST", "/v2/forecasts", planner=True, json_body={"project_id": project_id, "worktree_id": detail["worktree_id"], "tasks": tasks, "persist": True})
+        if forecast.status_code != 200:
+            return forecast
+        return await _proxy_bridge("PUT", f"/v2/plans/{plan_id}/revisions", planner=True, json_body={"project_id": project_id, "tasks": tasks, "expected_revision_id": body["expected_revision_id"], "forecast_id": json.loads(forecast.body)["forecast_id"], "created_by": "dashboard"})
+
     @app.post("/api/v2/plans/{plan_id}/{action}")
     async def api_v2_plan_action(plan_id: str, action: str, project_id: str, request: Request) -> JSONResponse:
         if action not in {"approve", "reject", "pause", "resume", "cancel"}:
@@ -677,6 +773,10 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             params={"project_id": project_id},
             json_body=body,
         )
+
+    @app.get("/api/v2/session-detail")
+    async def api_v21_session_detail(session_id: UUID, project_id: UUID) -> JSONResponse:
+        return await _proxy_bridge("GET", f"/v2/sessions/{session_id}", params={"project_id": str(project_id)})
 
     @app.get("/api/v2/sessions")
     async def api_v2_sessions(project_id: str, complexity: str = "", outcome: str = "") -> JSONResponse:
@@ -704,6 +804,11 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     @app.get("/api/v2/analytics/calibration")
     async def api_v2_calibration(project_id: str) -> JSONResponse:
         return await _proxy_bridge("GET", "/v2/analytics/calibration", params={"project_id": project_id})
+
+    @app.post("/api/v2/quotas")
+    async def api_v2_quota_update(request: Request):
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v2/quotas", use_admin=True, json_body=await request.json())
 
     @app.get("/api/v2/quotas")
     async def api_v2_quotas() -> JSONResponse:

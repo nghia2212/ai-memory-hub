@@ -53,7 +53,7 @@ def _setup_project(client: TestClient, name: str = "v2-proj", identity: str = "g
 
 
 def test_v2_catalog_routing_and_adaptive_brain_defaults(client: TestClient):
-    assert client.get("/healthz").json()["schema_version"] == 3
+    assert client.get("/healthz").json()["schema_version"] == 4
     pid, wid = _setup_project(client)
 
     # Adaptive brain defaults reflect verified host CLI discovery (Neon/Hydrogen unavailable)
@@ -279,6 +279,23 @@ def test_v2_plans_dag_atomic_approval_and_runner_lifecycle(client: TestClient):
         json={"project_id": pid, "lease_id": lease_a, "outcome": "succeeded", "accepted": True, "tests_passed": True},
     )
     assert comp_a.status_code == 200
+
+    # V2.2: planner and runner traces are produced by real Bridge operations.
+    traces = client.get("/v2/traces", params={"project_id": pid, "plan_id": plan_id}, headers=h("tok-read"))
+    assert traces.status_code == 200, traces.text
+    items = traces.json()["items"]
+    planner = next(t for t in items if t["step_name"] == "validate_and_persist_plan")
+    agent = next(t for t in items if t["session_id"] == sess_a)
+    assert planner["status"] == "succeeded"
+    assert planner["used_llm"] is False
+    assert agent["parent_trace_id"] == planner["trace_id"]
+    assert agent["root_trace_id"] == planner["trace_id"]
+    assert agent["status"] == "succeeded"
+    assert agent["used_llm"] is None
+    assert agent["input_tokens"] is None
+    assert agent["duration_ms"] >= 0
+    assert "heartbeat" in agent["metadata_json"]["coverage"]
+
 
     # Claim & complete Task B
     c3 = client.post(

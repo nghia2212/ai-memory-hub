@@ -9,6 +9,8 @@ import shlex
 from pathlib import Path
 from typing import Any, Protocol
 
+from .trace_ops import observe_rpc
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,6 +79,7 @@ class StdioCBMClient:
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
+        env.pop("BRIDGE_TRACE_TOKEN", None)
         env["CBM_CACHE_DIR"] = str(self._cache_dir)
         env["CBM_LOG_LEVEL"] = "warn"
         if self._allowed_root is not None:
@@ -189,18 +192,10 @@ class StdioCBMClient:
             if self._proc is None or self._proc.returncode is not None or not self._initialized:
                 await self._spawn_and_init()
             try:
-                resp = await self._send_rpc(
-                    "tools/call",
-                    {"name": name, "arguments": arguments},
-                    timeout=timeout,
-                )
+                resp = await observe_rpc(name, lambda: self._send_rpc("tools/call", {"name": name, "arguments": arguments}, timeout))
             except (CBMClientError, BrokenPipeError, ConnectionResetError):
                 await self._spawn_and_init()
-                resp = await self._send_rpc(
-                    "tools/call",
-                    {"name": name, "arguments": arguments},
-                    timeout=timeout,
-                )
+                resp = await observe_rpc(name, lambda: self._send_rpc("tools/call", {"name": name, "arguments": arguments}, timeout))
             return _extract_tool_payload(resp)
 
     async def index_repository(

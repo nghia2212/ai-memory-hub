@@ -5,12 +5,15 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
+import re
 import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from .trace_execution import build_execution_trace
 from .cli_runner import UnsafeCLIRequestError, build_cli_command, parse_cli_telemetry
 
 
@@ -143,6 +146,7 @@ class HostRunner:
             errors="replace",
             timeout=timeout,
             shell=False,
+            env={**os.environ, "AI_MEMORY_MANAGED_SESSION": "1"},
             check=False,
         )
         return proc.returncode, proc.stdout, proc.stderr
@@ -227,9 +231,32 @@ class HostRunner:
             self.bridge.heartbeat(job_id, lease_id, peak_context_tokens=None, project_id=project_id, runner_id=self.runner_id)
         else:
             self.bridge.heartbeat(job_id, lease_id, peak_context_tokens=None)
+        stop = threading.Event()
+        lost = threading.Event()
+        def renew():
+            while not stop.wait(12):
+                try:
+                    if isinstance(self.bridge, HttpRunnerBridge):
+                        self.bridge.heartbeat(job_id, lease_id, peak_context_tokens=None, project_id=project_id, runner_id=self.runner_id)
+                    else:
+                        self.bridge.heartbeat(job_id, lease_id, peak_context_tokens=None)
+                except Exception:
+                    lost.set()
+                    return
+        worker = threading.Thread(target=renew, daemon=True)
+        worker.start()
+        trace_started = datetime.now(timezone.utc)
+        def report_trace(status, error=None, output=""):
+            try:
+                payload = build_execution_trace(job,trace_started,datetime.now(timezone.utc),status=status,error_code=error,stdout=output)
+                if payload and isinstance(self.bridge,HttpRunnerBridge):
+                    self.bridge._request("/v2/traces",payload=payload)
+            except Exception:
+                pass
         try:
             rc, stdout, _stderr = self._run_proc(cmd, cwd, timeout_s)
         except subprocess.TimeoutExpired:
+            report_trace("unknown", "timeout")
             self.bridge.checkpoint(
                 job_id,
                 {
@@ -240,6 +267,15 @@ class HostRunner:
                 },
             )
             return {"claimed": True, "job_id": job_id, "status": "failed", "reason": "timeout"}
+        except Exception as exc:
+            report_trace("failed",type(exc).__name__)
+            raise
+        finally:
+            stop.set()
+            worker.join(timeout=12)
+        report_trace("unknown" if lost.is_set() else ("succeeded" if rc == 0 else "failed"), None if rc == 0 else f"cli_exit_{rc}", stdout)
+        if lost.is_set():
+            return {"claimed": True, "job_id": job_id, "status": "unknown", "reason": "heartbeat_failed"}
 
         counters, upstream_sid, summary = parse_cli_telemetry(cli_family=cli_family, stdout=stdout)
         usage_dict = {
@@ -277,15 +313,17 @@ class HostRunner:
             )
             return {"claimed": True, "job_id": job_id, "status": "budget_exceeded"}
 
-        final_outcome = "succeeded" if rc == 0 else "failed"
+        quota_error = bool(re.search(r"(?i)quota exceeded|rate.limit exceeded|resource.exhausted|quota will reset", (_stderr or "")[:4000]))
+        final_outcome = "succeeded" if rc == 0 and not quota_error else "failed"
         self.bridge.complete(
             job_id,
             {
                 "project_id": project_id,
                 "lease_id": lease_id,
                 "outcome": final_outcome,
-                "accepted": rc == 0,
-                "tests_passed": rc == 0,
+                "error_code": "quota_exceeded" if quota_error else (f"cli_exit_{rc}" if rc else None),
+                "accepted": None,
+                "tests_passed": None,
                 "handoff_summary": summary,
             },
         )
