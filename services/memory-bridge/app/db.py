@@ -19,7 +19,9 @@ from .trace_schema import TRACE_SQL
 from .trace_lifecycle import agent_finished
 from .v3_schema import V3_CONV_SQL, V3_MCP_SQL
 
-CURRENT_SCHEMA_VERSION = 6
+from .v31_schema import BUSINESS_SQL
+
+CURRENT_SCHEMA_VERSION = 7
 
 MIGRATIONS: list[tuple[int, str, str]] = [
     (
@@ -528,6 +530,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (4, "execution_traces_v22", TRACE_SQL),
     (5, "dynamic_mcp_registry_v30", V3_MCP_SQL),
     (6, "conversation_history_fts_v32", V3_CONV_SQL),
+    (7, "business_workspace_v31", BUSINESS_SQL),
 ]
 
 
