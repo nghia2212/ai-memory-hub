@@ -36,3 +36,6 @@ Restored missing workbench.js/css referenced by Codex; added real scoped tree/so
 
 ### P1.2 checkpoint
 Added explicit upstream-edge visualization, source navigation for fresh index evidence, separate same-project worktree index/source comparisons and stale-response guards. Unknown graph formats remain evidence-only. Real CBM v0.12.1 trace payload and browser QA NOT RUN; no merge or deployment.
+
+### P1.3 checkpoint
+Workbench task creation uses Bridge routing. Policy auth modes intersect request constraints; expired/retiring catalog entries excluded; unknown cost remains unknown; explicit cost limit requires evaluation evidence. Host dispatch rejects non-subscription CLI. Quota semantics and reasoning-effort execution still require provider-specific verification. Tests NOT RUN; no deploy.

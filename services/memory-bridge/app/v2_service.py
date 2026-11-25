@@ -456,7 +456,9 @@ class V2BridgeService:
         with self.db.read_conn() as conn:
             self._ensure_project(conn, pid)
             policy = self._get_policy_row(conn, pid)
-            allowed_modes = req.allowed_auth_modes or json.loads(policy["allowed_auth_modes_json"])
+            allowed_modes = json.loads(policy["allowed_auth_modes_json"])
+            if req.allowed_auth_modes is not None:
+                allowed_modes = [mode for mode in allowed_modes if mode in req.allowed_auth_modes]
             if not policy["allow_paid_api_fallback"]:
                 allowed_modes = [m for m in allowed_modes if m != "api_key"]
 
@@ -475,16 +477,21 @@ class V2BridgeService:
                 }
 
             snap = conn.execute(
-                "SELECT id FROM v2_catalog_snapshots ORDER BY fetched_at DESC LIMIT 1"
+                "SELECT id, expires_at FROM v2_catalog_snapshots ORDER BY fetched_at DESC LIMIT 1"
             ).fetchone()
             if not snap:
                 raise BridgeError(503, "catalog_empty", "No verified model catalog snapshot available")
 
+            now = utc_now_iso()
+            if snap["expires_at"] and conn.execute("SELECT julianday(?) <= julianday(?)", (snap["expires_at"], now)).fetchone()[0]:
+                raise BridgeError(409, "catalog_stale", "Refresh model catalog before routing")
             models = conn.execute(
                 "SELECT * FROM v2_models WHERE snapshot_id = ? AND status = 'verified'",
                 (snap["id"],),
             ).fetchall()
-            eligible = [dict(m) for m in models if m["auth_mode"] in allowed_modes]
+            eligible = [dict(m) for m in models if m["auth_mode"] in allowed_modes
+                        and not json.loads(m["capabilities_json"]).get("retiring_soon")
+                        and (not m["expires_at"] or conn.execute("SELECT julianday(?) > julianday(?)", (m["expires_at"], now)).fetchone()[0])]
             if not eligible:
                 raise BridgeError(422, "no_eligible_model", "No eligible verified model matches policy constraints")
 
@@ -492,16 +499,33 @@ class V2BridgeService:
                 """
                 SELECT * FROM v2_model_evaluations
                 WHERE task_type = ? AND complexity = ? AND (project_id = ? OR project_id IS NULL)
+                ORDER BY (project_id IS NOT NULL) DESC, sample_count DESC, created_at DESC
                 """,
                 (req.task_type, req.complexity, pid),
             ).fetchall()
-            eval_map = {(e["provider"], e["model_id"], e["auth_mode"]): dict(e) for e in evals}
+            eval_map = {}
+            for e in evals:
+                if e["sample_count"] > 0 and e["evidence_kind"] != "hypothesis":
+                    eval_map.setdefault((e["provider"], e["model_id"], e["auth_mode"]), dict(e))
+            role = "tier1_light" if req.complexity in ("XS", "S") else "tier2_primary" if req.complexity == "M" else "tier3_advanced"
+            configured = conn.execute("SELECT effective_provider, effective_model_id, effective_effort FROM v2_brain_roles WHERE project_id=? AND role_name=?", (pid, role)).fetchone()
+            preferred = (configured["effective_provider"], configured["effective_model_id"]) if configured else (None, None)
+            limit = req.max_cost_usd
+            if policy["max_task_cost_usd"] is not None:
+                limit = min(limit, policy["max_task_cost_usd"]) if limit is not None else policy["max_task_cost_usd"]
+            if limit is not None:
+                eligible = [m for m in eligible if (ev := eval_map.get((m["provider"], m["model_id"], m["auth_mode"]))) and ev["avg_effective_cost_usd"] is not None and ev["avg_effective_cost_usd"] <= limit]
+            if not eligible:
+                raise BridgeError(422, "no_budget_evidence", "No eligible model has verified cost evidence within the requested budget")
 
-            def score(m: dict[str, Any]) -> tuple[float, float]:
+            def score(m: dict[str, Any]):
                 ev = eval_map.get((m["provider"], m["model_id"], m["auth_mode"]))
-                quality = float(ev["correctness_score"] or 0.5) if ev else 0.5
-                cost = float(ev["avg_effective_cost_usd"] or m["price_input_per_1m"] or 0.0) if ev else float(m["price_input_per_1m"] or 0.0)
-                return (-quality, cost)
+                quality = ev["correctness_score"] if ev and ev["correctness_score"] is not None else None
+                cost = ev["avg_effective_cost_usd"] if ev else None
+                return (quality is None, -(quality if quality is not None else 0),
+                        (m["provider"], m["model_id"]) != preferred,
+                        cost is None, cost if cost is not None else 0,
+                        m["provider"], m["model_id"])
 
             ranked = sorted(eligible, key=score)
             chosen = ranked[0]
@@ -516,7 +540,7 @@ class V2BridgeService:
                 "rationale": (
                     f"Chọn từ catalog xác minh dựa trên {ev['sample_count']} mẫu ({ev['evidence_kind']})"
                     if ev
-                    else "Cold-start: chưa có mẫu đánh giá thực tế, chọn model xác minh rẻ/phù hợp nhất"
+                    else "Cold-start: chưa có mẫu đánh giá; ưu tiên role cấu hình nếu hợp lệ, không giả định chi phí bằng 0"
                 ),
                 "evidence_kind": ev["evidence_kind"] if ev else "hypothesis",
                 "cold_start": ev is None,

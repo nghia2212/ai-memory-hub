@@ -520,6 +520,8 @@ def execute_approved_plan(
             rc, out, err = 1, "", "Registered worktree unavailable"
         elif provider == "local" or model_id == "deterministic-rules":
             rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
+        elif auth_mode != "subscription_cli":
+            rc, out, err = 1, "", "Non-subscription dispatch disabled"
         elif provider == "claude":
             rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id, prompt], cwd=cwd, timeout=90, managed=True)
         elif provider == "codex":

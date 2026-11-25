@@ -595,29 +595,22 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             else:
                 complexity = "L"
 
-        role_name = "tier1_light" if complexity in {"XS", "S"} else ("tier2_primary" if complexity == "M" else "tier3_advanced")
-        # Fetch project's effective Brain config from Bridge
-        brain_resp = await _proxy_bridge("GET", "/v2/brain/config", params={"project_id": project_id})
-        brain_data = {}
-        try:
-            import json as _json
-            brain_data = _json.loads(brain_resp.body.decode("utf-8"))
-        except Exception:
-            brain_data = {}
-        roles = {r.get("role_name"): r for r in brain_data.get("roles", [])}
-        chosen = roles.get(role_name) or roles.get("tier2_primary") or {}
-        provider = chosen.get("effective_provider")
-        model_id = chosen.get("effective_model_id")
-        effort = chosen.get("effective_effort")
-        auth_mode = chosen.get("auth_mode")
+        routing = await _proxy_bridge("POST", "/v2/routing/recommend", planner=True,
+            json_body={"project_id": project_id, "task_type": task_type, "complexity": complexity,
+                       "allowed_auth_modes": ["subscription_cli"]})
+        if routing.status_code != 200:
+            return routing
+        chosen = json.loads(routing.body)
+        provider = chosen["provider"]
+        model_id = chosen["model_id"]
+        effort = chosen.get("effort")
+        auth_mode = chosen["auth_mode"]
         catalog = await _proxy_bridge("GET", "/v2/catalog")
+        if catalog.status_code != 200:
+            return catalog
         catalog_data = json.loads(catalog.body)
-        models = catalog_data.get("models", [])
-        if catalog_data.get("is_stale") or not any(
-            m.get("provider") == provider and m.get("model_id") == model_id and
-            m.get("status") == "verified" and m.get("auth_mode") == auth_mode == "subscription_cli" for m in models
-        ):
-            raise HTTPException(409, "Cần chọn model CLI khả dụng và làm mới danh mục")
+        if auth_mode != "subscription_cli" or catalog_data.get("is_stale"):
+            raise HTTPException(409, "Verified subscription CLI required")
         scope = {"project_id": project_id, "worktree_id": worktree_id}
         terms = re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", objective)
         code_term = str(body.get("symbol") or next((t for t in terms if any(c.isupper() for c in t[1:])), objective[:100]))[:180]
