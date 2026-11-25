@@ -58,3 +58,26 @@ def test_memory_operation_evidence(client, monkeypatch):
     assert response.json()["parent_trace_id"]==parent
     assert client.get("/v2/traces",params={"project_id":pid},headers=h("fixture-trace-only")).status_code==401
     assert client.post("/v2/traces",json=dict(adapter,input_tokens=100),headers=h("fixture-trace-only")).status_code==403
+
+
+def test_session_usage_projection(client):
+    pid,wid=_setup_project(client)
+    sid=str(uuid4())
+    scope={"project_id":pid,"worktree_id":wid,"session_id":sid}
+    r=client.post("/v2/sessions",json={**scope,"role":"manual_cli","provider":"codex","model_id":"unknown"},headers=h("tok-runner"))
+    assert r.status_code in (200,201),r.text
+    for seq,mode,count in [(1,"delta",10),(2,"cumulative",25),(3,"delta",5)]:
+        payload={**scope,"source_event_id":f"usage-{seq}","sequence_no":seq,
+                 "usage":{"input_tokens":count,"measurement_kind":"measured","counter_mode":mode,"source":"fixture"}}
+        for _ in range(2):
+            r=client.post("/v2/usage",json=payload,headers=h("tok-runner"))
+            assert r.status_code in (200,201),r.text
+    rows=client.get("/v2/traces",params={"project_id":pid,"session_id":sid},headers=h("tok-read")).json()["items"]
+    usage=[r for r in rows if r["step_type"]=="session_usage"]
+    assert len(usage)==1
+    assert usage[0]["input_tokens"]==30
+    assert usage[0]["output_tokens"] is None
+    assert usage[0]["cost_usd"] is None
+    assert usage[0]["used_llm"] is None
+    assert usage[0]["duration_ms"] is None
+    assert not any(r["step_type"]=="llm_call" for r in rows)
