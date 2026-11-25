@@ -154,32 +154,3 @@ def create_trace_router(db, cfg):
                 raise BridgeError(404,"trace_not_found","Trace not found")
             return decode(row)
     return router
-), p=Depends(reader)):
-        project = str(project_id)
-        filters = {"project_id":project,"worktree_id":worktree_id,"session_id":session_id,"plan_id":plan_id,"task_id":task_id,"root_trace_id":root_trace_id,"actor_id":actor_id,"model_id":model_id,"status":status}
-        clauses, args = [], []
-        for k,v in filters.items():
-            if v is not None:
-                clauses.append(k+"=?")
-                args.append(str(v))
-        for value, operator in ((from_time,">="),(to_time,"<=")):
-            if value is not None:
-                if value.utcoffset() is None:
-                    raise BridgeError(422,"trace_time","Timezone required")
-                clauses.append("started_at"+operator+"?")
-                args.append(value.astimezone(timezone.utc).isoformat(timespec="microseconds"))
-        where = " AND ".join(clauses)
-        with db.read_conn() as conn:
-            check_scope(conn,project,str(worktree_id) if worktree_id else None)
-            total = conn.execute("SELECT COUNT(*) FROM v22_execution_traces WHERE "+where,args).fetchone()[0]
-            rows = conn.execute("SELECT * FROM v22_execution_traces WHERE "+where+" ORDER BY started_at,trace_id LIMIT ? OFFSET ?",args+[limit,offset]).fetchall()
-            return {"items":[decode(r) for r in rows],"total":total,"next_offset":offset+limit if offset+limit<total else None}
-
-    @router.get("/{trace_id}")
-    def detail(trace_id: UUID, project_id: UUID, p=Depends(reader)):
-        with db.read_conn() as conn:
-            row = conn.execute("SELECT * FROM v22_execution_traces WHERE trace_id=? AND project_id=?", (str(trace_id),str(project_id))).fetchone()
-            if not row:
-                raise BridgeError(404,"trace_not_found","Trace not found")
-            return decode(row)
-    return router
