@@ -31,6 +31,7 @@ class RunStats:
     processed: int = 0
     skipped_unapproved: int = 0
     skipped_budget: int = 0
+    skipped_duplicate: int = 0
     errors: int = 0
     total_tokens: int = 0
 
@@ -66,6 +67,37 @@ class HermesWorker:
         self.config = config
         self.bridge = bridge
         self.provider = provider
+        self._processed_keys: set[str] = self._load_processed_keys()
+
+    def _state_file(self) -> Any:
+        if not self.config.state_dir:
+            return None
+        from pathlib import Path
+
+        return Path(self.config.state_dir) / "processed_keys.json"
+
+    def _load_processed_keys(self) -> set[str]:
+        sf = self._state_file()
+        if sf is None or not sf.is_file():
+            return set()
+        try:
+            data = json.loads(sf.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return {str(k) for k in data[-5000:]}
+        except Exception:
+            pass
+        return set()
+
+    def _persist_processed_keys(self) -> None:
+        sf = self._state_file()
+        if sf is None:
+            return
+        try:
+            sf.parent.mkdir(parents=True, exist_ok=True)
+            trimmed = sorted(self._processed_keys)[-5000:]
+            sf.write_text(json.dumps(trimmed), encoding="utf-8")
+        except Exception:
+            pass
 
     def run_once(self) -> RunStats:
         if not self.config.enabled:
@@ -93,37 +125,50 @@ class HermesWorker:
             worktree_id = str(event.get("worktree_id") or "")
             task_id = str(event.get("task_id") or "")
             event_source_agent = str(event.get("source_agent") or "")
-            event_id = str(event.get("id") or event.get("event_id") or "unknown")
+            event_id = str(event.get("event_id") or event.get("id") or "")
             event_kind = str(event.get("kind") or "session_end").lower()
             raw_payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
             sanitized = sanitize_event_payload(raw_payload, max_chars=self.config.max_input_chars)
+            idem_key = compute_idempotency_key(project_id, event_id or "unknown", sanitized)
+
+            # Prevent duplicate LLM calls for already-processed events
+            if idem_key in self._processed_keys:
+                stats.skipped_duplicate += 1
+                continue
 
             try:
                 summary = provider.summarize(event_kind, sanitized)
                 used_tokens = (summary.input_tokens or 0) + (summary.output_tokens or 0)
                 stats.total_tokens += used_tokens
 
-                candidate_payload = {
+                ev_parts = [f"provider={summary.provider}", f"model={summary.model}"]
+                if task_id:
+                    ev_parts.append(f"task_id={task_id}")
+                if event_source_agent:
+                    ev_parts.append(f"source_agent={event_source_agent}")
+                evidence_ref = ";".join(ev_parts)[:512]
+
+                # Strictly matches Memory Bridge WorkerResultRequest schema
+                candidate_payload: dict[str, Any] = {
                     "project_id": project_id,
-                    "worktree_id": worktree_id or None,
-                    "task_id": task_id or None,
-                    "event_id": event_id,
-                    "idempotency_key": compute_idempotency_key(project_id, event_id, sanitized),
-                    "state": "candidate",
+                    "worktree_id": worktree_id,
                     "type": summary.memory_type,
                     "title": summary.title,
                     "body": summary.summary,
                     "tags": summary.tags,
-                    "source_agent": "hermes",
-                    "provenance": {
-                        "provider": summary.provider,
-                        "model": summary.model,
-                        "input_tokens": summary.input_tokens,
-                        "output_tokens": summary.output_tokens,
-                        "event_source_agent": event_source_agent or None,
-                    },
+                    "evidence_ref": evidence_ref,
+                    "idempotency_key": idem_key,
                 }
+                if event_id:
+                    candidate_payload["event_id"] = event_id
+                if summary.input_tokens is not None:
+                    candidate_payload["input_tokens"] = summary.input_tokens
+                if summary.output_tokens is not None:
+                    candidate_payload["output_tokens"] = summary.output_tokens
+
                 self.bridge.post_candidate_result(candidate_payload)
+                self._processed_keys.add(idem_key)
+                self._persist_processed_keys()
                 stats.processed += 1
             except (ProviderError, Exception):
                 stats.errors += 1

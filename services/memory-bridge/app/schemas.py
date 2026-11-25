@@ -47,6 +47,7 @@ class CodeSearchRequest(StrictModel):
 class IndexTriggerRequest(StrictModel):
     project_id: UUID
     worktree_id: UUID
+    mode: Literal["fast", "moderate", "full"] = "fast"
     force: bool = False
 
 
@@ -100,7 +101,7 @@ class WorkerResultRequest(StrictModel):
     project_id: UUID
     worktree_id: UUID
     event_id: UUID | None = None
-    type: Literal["decision", "bugfix", "requirement", "experience", "note"] = "experience"
+    type: Literal["decision", "bugfix", "requirement", "handoff", "experience", "note"] = "experience"
     title: str = Field(min_length=1, max_length=240)
     body: str = Field(min_length=1, max_length=16000)
     tags: list[str] = Field(default_factory=list, max_length=20)

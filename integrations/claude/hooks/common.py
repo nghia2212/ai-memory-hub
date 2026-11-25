@@ -152,9 +152,12 @@ def match_registered_scope(
 
     norm_worktree = os.path.normcase(os.path.normpath(scope.worktree_root))
     for proj in projects:
-        if not isinstance(proj, dict) or not proj.get("id"):
+        if not isinstance(proj, dict):
             continue
-        pid = str(proj["id"])
+        raw_pid = proj.get("project_id") or proj.get("id")
+        if not raw_pid:
+            continue
+        pid = str(raw_pid)
         wt_resp = http_json(
             f"{bridge_url}/v1/projects/{pid}/worktrees",
             method="GET",
@@ -167,9 +170,12 @@ def match_registered_scope(
         if not isinstance(worktrees, list):
             continue
         for wt in worktrees:
-            if not isinstance(wt, dict) or not wt.get("id"):
+            if not isinstance(wt, dict):
                 continue
-            wt_path = str(wt.get("host_path") or wt.get("path") or "")
+            raw_wid = wt.get("worktree_id") or wt.get("id")
+            if not raw_wid:
+                continue
+            wt_path = str(wt.get("canonical_root") or wt.get("host_path") or wt.get("path") or "")
             if wt_path and os.path.normcase(os.path.normpath(wt_path)) == norm_worktree:
-                return pid, str(wt["id"])
+                return pid, str(raw_wid)
     return None, None

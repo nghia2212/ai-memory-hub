@@ -37,6 +37,7 @@ class HermesConfig:
     max_input_chars: int = 2000
     max_output_tokens: int = 400
     max_total_tokens_per_run: int = 8000
+    state_dir: str = ""
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "HermesConfig":
@@ -62,6 +63,7 @@ class HermesConfig:
             max_total_tokens_per_run=max(
                 500, min(50000, int(src.get("HERMES_MAX_TOTAL_TOKENS_PER_RUN", "8000")))
             ),
+            state_dir=src.get("HERMES_STATE_DIR", "").strip(),
         )
 
     def validate_for_run(self) -> tuple[bool, str]:

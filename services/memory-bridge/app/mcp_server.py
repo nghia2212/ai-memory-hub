@@ -12,7 +12,15 @@ from .schemas import (
     MemoryCreateRequest,
     MemorySearchRequest,
 )
+from .security import current_mcp_principal, require_scope
 from .service import MemoryBridgeService
+
+
+def _require_mcp_scope(scope: str) -> None:
+    principal = current_mcp_principal.get()
+    if principal is None:
+        raise PermissionError(f"Unauthenticated MCP call; scope '{scope}' is required")
+    require_scope(principal, scope)
 
 
 def create_mcp_server(service: MemoryBridgeService) -> FastMCP:
@@ -60,6 +68,7 @@ def create_mcp_server(service: MemoryBridgeService) -> FastMCP:
         source_agent: str = "mcp",
     ) -> dict[str, Any]:
         """Save a candidate task handoff result with idempotency_key."""
+        _require_mcp_scope("write")
         req = HandoffCreateRequest(
             project_id=UUID(project_id),
             worktree_id=UUID(worktree_id),
@@ -83,6 +92,7 @@ def create_mcp_server(service: MemoryBridgeService) -> FastMCP:
         source_agent: str = "mcp",
     ) -> dict[str, Any]:
         """Save a candidate decision memory with idempotency_key."""
+        _require_mcp_scope("write")
         req = MemoryCreateRequest(
             project_id=UUID(project_id),
             worktree_id=UUID(worktree_id),

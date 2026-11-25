@@ -12,6 +12,11 @@ services:
     environment:
       PORT: "8081"
       SERVICE_NAME: codebase
+      CBM_ALLOWED_ROOT: /repos
+      BRIDGE_URL: http://memory-bridge:8082
+      BRIDGE_TOKEN: "${BRIDGE_READ_TOKEN:-}"
+      CODEBASE_READ_TOKENS: "${CODEBASE_READ_TOKEN:-${CODEBASE_TOKEN:-}}"
+      CODEBASE_ADMIN_TOKENS: "${CODEBASE_ADMIN_TOKEN:-${CODEBASE_TOKEN:-}}"
     networks: [core]
     ports:
       - "127.0.0.1:${CODEBASE_PORT:-8081}:8081"
@@ -34,6 +39,14 @@ services:
     environment:
       PORT: "8082"
       SERVICE_NAME: memory-bridge
+      CODEBASE_URL: http://codebase:8081
+      CODEBASE_TOKEN: "${CODEBASE_ADMIN_TOKEN:-${CODEBASE_TOKEN:-}}"
+      CODEBASE_READ_TOKEN: "${CODEBASE_READ_TOKEN:-${CODEBASE_TOKEN:-}}"
+      CODEBASE_ADMIN_TOKEN: "${CODEBASE_ADMIN_TOKEN:-${CODEBASE_TOKEN:-}}"
+      BRIDGE_READ_TOKENS: "${BRIDGE_READ_TOKEN:-}"
+      BRIDGE_WRITE_TOKENS: "${BRIDGE_WRITE_TOKEN:-}"
+      BRIDGE_ADMIN_TOKENS: "${BRIDGE_ADMIN_TOKEN:-}"
+      BRIDGE_WORKER_TOKENS: "${BRIDGE_WORKER_TOKEN:-}"
     networks: [core]
     ports:
       - "127.0.0.1:${BRIDGE_PORT:-8082}:8082"
@@ -58,6 +71,12 @@ services:
       SERVICE_NAME: dashboard
       BRIDGE_URL: http://memory-bridge:8082
       CODEBASE_URL: http://codebase:8081
+      HERMES_URL: http://hermes:8083
+      BRIDGE_READ_TOKEN: "${BRIDGE_READ_TOKEN:-}"
+      BRIDGE_ADMIN_TOKEN: "${BRIDGE_ADMIN_TOKEN:-}"
+      DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD:-}"
+      DASHBOARD_SESSION_SECRET: "${DASHBOARD_SESSION_SECRET:-}"
+      DASHBOARD_ALLOWED_ORIGINS: "${DASHBOARD_ALLOWED_ORIGINS:-http://127.0.0.1:8080,http://localhost:8080}"
     networks: [core]
     ports:
       - "127.0.0.1:${HUB_PORT:-8080}:8080"
@@ -78,6 +97,15 @@ services:
     environment:
       PORT: "8083"
       SERVICE_NAME: hermes
+      HERMES_ENABLED: "${HERMES_ENABLED:-false}"
+      HERMES_PROVIDER: "${HERMES_PROVIDER:-deepseek}"
+      BRIDGE_URL: http://memory-bridge:8082
+      BRIDGE_WORKER_TOKEN: "${BRIDGE_WORKER_TOKEN:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      DEEPSEEK_BASE_URL: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
+      DEEPSEEK_MODEL: "${DEEPSEEK_MODEL:-deepseek-flash}"
+      HERMES_APPROVED_PROJECTS: "${HERMES_APPROVED_PROJECTS:-}"
+      HERMES_STATE_DIR: /data
     networks: [core, provider]
     profiles: [hermes]
     volumes:

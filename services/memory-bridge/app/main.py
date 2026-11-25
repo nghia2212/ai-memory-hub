@@ -27,7 +27,7 @@ from .schemas import (
     WorkerResultRequest,
     WorktreeCreateRequest,
 )
-from .security import AuthPrincipal, authenticate_token, extract_bearer_token, require_scope
+from .security import AuthPrincipal, authenticate_token, current_mcp_principal, extract_bearer_token, require_scope
 from .service import MemoryBridgeService
 
 
@@ -64,6 +64,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 require_scope(principal, "read")
             except BridgeError as exc:
                 return JSONResponse(status_code=exc.status_code, content=error_payload(exc.code, exc.message))
+            ctx_token = current_mcp_principal.set(principal)
+            try:
+                return await call_next(request)
+            finally:
+                current_mcp_principal.reset(ctx_token)
         return await call_next(request)
 
     def get_principal(request: Request) -> AuthPrincipal:
@@ -127,24 +132,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # --- Search & Index ---
     @app.post("/v1/search/memory")
-    async def search_memory(req: MemorySearchRequest, _: AuthPrincipal = Depends(require_read)) -> dict[str, Any]:
+    def search_memory(req: MemorySearchRequest, _: AuthPrincipal = Depends(require_read)) -> dict[str, Any]:
         return service.search_memory(req)
 
     @app.post("/v1/search/code")
-    async def search_code(req: CodeSearchRequest, _: AuthPrincipal = Depends(require_read)) -> dict[str, Any]:
+    def search_code(req: CodeSearchRequest, _: AuthPrincipal = Depends(require_read)) -> dict[str, Any]:
         return service.search_code(req)
 
     @app.post("/v1/index", status_code=202)
-    async def trigger_index(req: IndexTriggerRequest, _: AuthPrincipal = Depends(require_admin)) -> dict[str, Any]:
+    def trigger_index(req: IndexTriggerRequest, _: AuthPrincipal = Depends(require_admin)) -> dict[str, Any]:
         return service.trigger_index(req)
 
     @app.get("/v1/index/{job_id}")
-    async def get_index_job(
+    def get_index_job(
         job_id: UUID,
         project_id: UUID | None = Query(default=None),
+        worktree_id: UUID | None = Query(default=None),
         _: AuthPrincipal = Depends(require_read),
     ) -> dict[str, Any]:
-        return service.get_index_job(str(job_id), str(project_id) if project_id else None)
+        return service.get_index_job(
+            str(job_id),
+            str(project_id) if project_id else None,
+            str(worktree_id) if worktree_id else None,
+        )
 
     # --- Memories & Verification ---
     @app.get("/v1/memories")
@@ -190,9 +200,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post("/v1/events")
-    async def create_event(req: EventCreateRequest, _: AuthPrincipal = Depends(require_write)) -> JSONResponse:
-        status_code, data = service.create_event(req)
+    async def create_event(
+        req: EventCreateRequest,
+        principal: AuthPrincipal = Depends(require_write),
+    ) -> JSONResponse:
+        status_code, data = service.create_event(req, principal=principal)
         return JSONResponse(status_code=status_code, content=data)
+
+    @app.post("/v1/events/{event_id}/approve")
+    async def approve_event(
+        event_id: UUID,
+        _: AuthPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        return service.approve_event(str(event_id))
 
     @app.post("/v1/handoffs")
     async def create_handoff(req: HandoffCreateRequest, _: AuthPrincipal = Depends(require_write)) -> JSONResponse:

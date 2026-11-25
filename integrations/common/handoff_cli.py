@@ -47,13 +47,34 @@ def create_handoff(
     seed = f"{project_id}:{worktree_id}:{task_id}:{source_agent}:{target_agent}:{bounded_summary}"
     idem_key = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
 
-    payload = {
+    handoff_payload = {
+        "project_id": project_id,
+        "worktree_id": worktree_id,
+        "task_id": task_id,
+        "summary": bounded_summary,
+        "evidence": {
+            "target_agent": target_agent,
+            "branch": scope.branch if scope else "unknown",
+            "head_commit": scope.head_commit[:40] if scope else "unknown",
+        },
+        "source_agent": source_agent,
+        "idempotency_key": idem_key,
+    }
+    handoff_resp = http_json(
+        f"{bridge_url}/v1/handoffs",
+        method="POST",
+        payload=handoff_payload,
+        token=write_token or read_token,
+        timeout=3.0,
+    )
+
+    event_payload = {
         "project_id": project_id,
         "worktree_id": worktree_id,
         "task_id": task_id,
         "source_agent": source_agent,
         "kind": "handoff_created",
-        "idempotency_key": idem_key,
+        "idempotency_key": f"ev-{idem_key}",
         "timestamp": ts,
         "payload": {
             "target_agent": target_agent,
@@ -62,16 +83,23 @@ def create_handoff(
             "head_commit": scope.head_commit[:40] if scope else "unknown",
         },
     }
-    resp = http_json(
+    event_resp = http_json(
         f"{bridge_url}/v1/events",
         method="POST",
-        payload=payload,
+        payload=event_payload,
         token=write_token or read_token,
         timeout=3.0,
     )
-    if resp is None:
+    if handoff_resp is None and event_resp is None:
         return {"ok": False, "error": "bridge_unavailable"}
-    return {"ok": True, "project_id": project_id, "worktree_id": worktree_id, "task_id": task_id, "response": resp}
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "worktree_id": worktree_id,
+        "task_id": task_id,
+        "handoff": handoff_resp,
+        "response": handoff_resp or event_resp,
+    }
 
 
 def get_handoff(

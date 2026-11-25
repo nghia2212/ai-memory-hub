@@ -224,7 +224,23 @@ def test_serialized_budget_strictly_bounded(client: TestClient):
 def test_idempotency_and_worker_redaction_and_metrics(client: TestClient):
     p1, w1 = _register_project_and_worktree(client, "proj1", "git:p1", "D:\\repo\\p1", hermes=False)
 
-    # Duplicate event idempotency
+    # Non-admin write token MUST NOT self-approve events for external LLM processing
+    self_approve = client.post(
+        "/v1/events",
+        headers=h("tok-write"),
+        json={
+            "project_id": p1,
+            "worktree_id": w1,
+            "task_id": "AIH-04",
+            "kind": "error",
+            "payload": {"msg": "attempt self approve"},
+            "idempotency_key": "ev-self-approve",
+            "approved": True,
+        },
+    )
+    assert self_approve.status_code == 403
+
+    # Duplicate event idempotency (admin-approved)
     ev_payload = {
         "project_id": p1,
         "worktree_id": w1,
@@ -234,39 +250,52 @@ def test_idempotency_and_worker_redaction_and_metrics(client: TestClient):
         "idempotency_key": "ev-1",
         "approved": True,
     }
-    r1 = client.post("/v1/events", headers=h("tok-write"), json=ev_payload)
+    r1 = client.post("/v1/events", headers=h("tok-admin"), json=ev_payload)
     assert r1.status_code == 201
-    r2 = client.post("/v1/events", headers=h("tok-write"), json=ev_payload)
+    r2 = client.post("/v1/events", headers=h("tok-admin"), json=ev_payload)
     assert r2.status_code == 201
     assert r1.json()["event_id"] == r2.json()["event_id"]
 
     # Mismatched payload with same idempotency_key -> 409
     bad_replay = dict(ev_payload, kind="different")
-    r3 = client.post("/v1/events", headers=h("tok-write"), json=bad_replay)
+    r3 = client.post("/v1/events", headers=h("tok-admin"), json=bad_replay)
     assert r3.status_code == 409
 
     # Worker denied when hermes_approved is False
     w_denied = client.get(f"/v1/worker/events?project_id={p1}", headers=h("tok-worker"))
     assert w_denied.status_code == 403
 
-    # Register approved project
+    # Register approved project; write token submits unapproved event, admin approves via /approve
     p2, w2 = _register_project_and_worktree(client, "proj2", "git:p2", "D:\\repo\\p2", hermes=True)
-    client.post(
+    ev_create = client.post(
         "/v1/events",
         headers=h("tok-write"),
         json={
             "project_id": p2,
             "worktree_id": w2,
             "task_id": "AIH-07",
+            "source_agent": "claude",
             "kind": "fix",
             "payload": {"detail": "Bearer secret_token_1234567890"},
             "idempotency_key": "ev-p2-1",
-            "approved": True,
+            "approved": False,
         },
     )
+    assert ev_create.status_code == 201
+    ev_id = ev_create.json()["event_id"]
+    # Before admin approval, worker sees nothing
+    assert client.get(f"/v1/worker/events?project_id={p2}", headers=h("tok-worker")).json()["items"] == []
+    # Write token cannot call /approve
+    assert client.post(f"/v1/events/{ev_id}/approve", headers=h("tok-write")).status_code == 403
+    # Admin approves event
+    assert client.post(f"/v1/events/{ev_id}/approve", headers=h("tok-admin")).status_code == 200
+
     wev = client.get(f"/v1/worker/events?project_id={p2}", headers=h("tok-worker"))
     assert wev.status_code == 200
     assert len(wev.json()["items"]) == 1
+    assert wev.json()["items"][0]["approved"] is True
+    assert wev.json()["items"][0]["external_llm_approved"] is True
+    assert wev.json()["items"][0]["source_agent"] == "claude"
     assert "secret_token_1234567890" not in json.dumps(wev.json())
 
     # Metrics before any token measurements

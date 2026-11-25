@@ -106,10 +106,60 @@ class TestHermesWorker(unittest.TestCase):
         self.assertEqual(stats.processed, 1)
         self.assertEqual(len(bridge.posted), 1)
         posted = bridge.posted[0]
-        self.assertEqual(posted["state"], "candidate")
-        self.assertEqual(posted["task_id"], "TASK-99")
-        self.assertEqual(posted["provenance"]["event_source_agent"], "codex")
+        # Must strictly match Memory Bridge WorkerResultRequest (no extra fields like state/provenance/task_id)
+        allowed_keys = {
+            "project_id",
+            "worktree_id",
+            "event_id",
+            "type",
+            "title",
+            "body",
+            "tags",
+            "evidence_ref",
+            "idempotency_key",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cost_usd",
+        }
+        self.assertTrue(set(posted.keys()).issubset(allowed_keys))
+        self.assertIn("task_id=TASK-99", posted["evidence_ref"])
+        self.assertIn("source_agent=codex", posted["evidence_ref"])
+        self.assertNotIn("SECRET_CODE", json.dumps(posted))
+        self.assertNotIn("sk-abc1234567890123", json.dumps(posted))
         self.assertTrue(posted["idempotency_key"].startswith("hermes:proj-1:e4:"))
+
+    def test_idempotency_prevents_duplicate_llm_calls(self) -> None:
+        cfg = HermesConfig.from_env(
+            {
+                "HERMES_ENABLED": "true",
+                "HERMES_PROVIDER": "mock",
+                "HERMES_APPROVED_PROJECTS": "proj-1",
+            }
+        )
+        events = [
+            {
+                "event_id": "e-dup-1",
+                "project_id": "proj-1",
+                "worktree_id": "wt-1",
+                "kind": "session_end",
+                "approved": True,
+                "payload": {"branch": "main", "note": "dedupe check"},
+            }
+        ]
+        bridge = FakeBridge(events)
+        provider = CountingMockProvider(tokens_per_call=100)
+        worker = HermesWorker(cfg, bridge, provider)
+
+        first = worker.run_once()
+        self.assertEqual(first.processed, 1)
+        self.assertEqual(provider.calls, 1)
+
+        # Second run seeing the exact same event must NOT invoke LLM again
+        second = worker.run_once()
+        self.assertEqual(second.processed, 0)
+        self.assertEqual(second.skipped_duplicate, 1)
+        self.assertEqual(provider.calls, 1)
 
     def test_budget_cap_stops_excess_events(self) -> None:
         cfg = HermesConfig.from_env(

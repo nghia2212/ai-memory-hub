@@ -73,7 +73,13 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=1.5,
             )
             if handoff:
-                h_summary = str(handoff.get("summary") or handoff.get("body") or "")[:300].replace("\n", " ")
+                h_summary = ""
+                h_items = handoff.get("items")
+                if isinstance(h_items, list) and h_items and isinstance(h_items[0], dict):
+                    h_summary = str(h_items[0].get("summary") or h_items[0].get("body") or "")
+                else:
+                    h_summary = str(handoff.get("summary") or handoff.get("body") or "")
+                h_summary = h_summary[:300].replace("\n", " ")
                 if h_summary:
                     lines.append(f"- Handoff [{task_id}]: {h_summary}")
 

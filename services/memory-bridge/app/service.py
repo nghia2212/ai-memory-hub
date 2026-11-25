@@ -24,8 +24,10 @@ from .schemas import (
     WorktreeCreateRequest,
 )
 from .security import (
+    AuthPrincipal,
     compute_payload_hash,
     redact_payload,
+    redact_secrets,
     tokenize_fts_query,
     validate_safe_worktree_root,
 )
@@ -305,56 +307,6 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
-    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
-        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
-        with self.db.read_conn() as conn:
-            if worktree_id:
-                self._ensure_worktree(conn, project_id, worktree_id)
-                wt_clause = "AND e.worktree_id = ?"
-                params: list[Any] = [project_id, worktree_id]
-            else:
-                self._ensure_project(conn, project_id)
-                wt_clause = ""
-                params = [project_id]
-
-            rows = conn.execute(
-                f"""
-                SELECT
-                    e.source_agent,
-                    e.kind AS last_kind,
-                    e.task_id,
-                    e.worktree_id,
-                    w.branch,
-                    w.head_commit,
-                    e.created_at AS last_seen_at
-                FROM events e
-                JOIN worktrees w ON w.id = e.worktree_id
-                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
-                ORDER BY e.created_at DESC
-                """,
-                params,
-            ).fetchall()
-
-            seen: set[tuple[str, str]] = set()
-            items: list[dict[str, Any]] = []
-            for r in rows:
-                key = (r["worktree_id"], r["source_agent"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                items.append(
-                    {
-                        "source_agent": r["source_agent"],
-                        "last_kind": r["last_kind"],
-                        "task_id": r["task_id"],
-                        "worktree_id": r["worktree_id"],
-                        "branch": r["branch"],
-                        "head_commit": r["head_commit"],
-                        "last_seen_at": r["last_seen_at"],
-                    }
-                )
-            return {"items": items}
-
     def create_worktree(self, project_id: str, req: WorktreeCreateRequest) -> dict[str, Any]:
         normalized_root = validate_safe_worktree_root(req.canonical_root)
         now = utc_now_iso()
@@ -587,56 +539,6 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
-    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
-        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
-        with self.db.read_conn() as conn:
-            if worktree_id:
-                self._ensure_worktree(conn, project_id, worktree_id)
-                wt_clause = "AND e.worktree_id = ?"
-                params: list[Any] = [project_id, worktree_id]
-            else:
-                self._ensure_project(conn, project_id)
-                wt_clause = ""
-                params = [project_id]
-
-            rows = conn.execute(
-                f"""
-                SELECT
-                    e.source_agent,
-                    e.kind AS last_kind,
-                    e.task_id,
-                    e.worktree_id,
-                    w.branch,
-                    w.head_commit,
-                    e.created_at AS last_seen_at
-                FROM events e
-                JOIN worktrees w ON w.id = e.worktree_id
-                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
-                ORDER BY e.created_at DESC
-                """,
-                params,
-            ).fetchall()
-
-            seen: set[tuple[str, str]] = set()
-            items: list[dict[str, Any]] = []
-            for r in rows:
-                key = (r["worktree_id"], r["source_agent"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                items.append(
-                    {
-                        "source_agent": r["source_agent"],
-                        "last_kind": r["last_kind"],
-                        "task_id": r["task_id"],
-                        "worktree_id": r["worktree_id"],
-                        "branch": r["branch"],
-                        "head_commit": r["head_commit"],
-                        "last_seen_at": r["last_seen_at"],
-                    }
-                )
-            return {"items": items}
-
     def search_memory(self, req: MemorySearchRequest) -> dict[str, Any]:
         t0 = time.perf_counter()
         project_id = str(req.project_id)
@@ -709,7 +611,13 @@ class MemoryBridgeService:
         return envelope
 
     # --- Events & Worker Queue ---
-    def create_event(self, req: EventCreateRequest) -> tuple[int, dict[str, Any]]:
+    def create_event(self, req: EventCreateRequest, principal: AuthPrincipal | None = None) -> tuple[int, dict[str, Any]]:
+        if req.approved and (principal is None or "admin" not in principal.scopes):
+            raise BridgeError(
+                403,
+                "forbidden",
+                "Only admin scope may approve events for external processing",
+            )
         project_id = str(req.project_id)
         worktree_id = str(req.worktree_id)
         scope_key = f"event:{project_id}:{worktree_id}"
@@ -794,55 +702,23 @@ class MemoryBridgeService:
             ]
             return {"items": items}
 
-    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
-        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
-        with self.db.read_conn() as conn:
-            if worktree_id:
-                self._ensure_worktree(conn, project_id, worktree_id)
-                wt_clause = "AND e.worktree_id = ?"
-                params: list[Any] = [project_id, worktree_id]
-            else:
-                self._ensure_project(conn, project_id)
-                wt_clause = ""
-                params = [project_id]
-
-            rows = conn.execute(
-                f"""
-                SELECT
-                    e.source_agent,
-                    e.kind AS last_kind,
-                    e.task_id,
-                    e.worktree_id,
-                    w.branch,
-                    w.head_commit,
-                    e.created_at AS last_seen_at
-                FROM events e
-                JOIN worktrees w ON w.id = e.worktree_id
-                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
-                ORDER BY e.created_at DESC
-                """,
-                params,
-            ).fetchall()
-
-            seen: set[tuple[str, str]] = set()
-            items: list[dict[str, Any]] = []
-            for r in rows:
-                key = (r["worktree_id"], r["source_agent"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                items.append(
-                    {
-                        "source_agent": r["source_agent"],
-                        "last_kind": r["last_kind"],
-                        "task_id": r["task_id"],
-                        "worktree_id": r["worktree_id"],
-                        "branch": r["branch"],
-                        "head_commit": r["head_commit"],
-                        "last_seen_at": r["last_seen_at"],
-                    }
-                )
-            return {"items": items}
+    def approve_event(self, event_id: str) -> dict[str, Any]:
+        with self.db.write_tx() as conn:
+            row = conn.execute(
+                "SELECT id, project_id, worktree_id, task_id, kind, approved FROM events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+            if not row:
+                raise BridgeError(404, "event_not_found", "Event not found")
+            conn.execute("UPDATE events SET approved = 1 WHERE id = ?", (event_id,))
+            return {
+                "event_id": row["id"],
+                "project_id": row["project_id"],
+                "worktree_id": row["worktree_id"],
+                "task_id": row["task_id"],
+                "kind": row["kind"],
+                "approved": True,
+            }
 
     def get_worker_events(self, project_id: str | None = None, limit: int = 10) -> dict[str, Any]:
         with self.db.read_conn() as conn:
@@ -857,7 +733,8 @@ class MemoryBridgeService:
             params.append(max(1, min(limit, 50)))
             rows = conn.execute(
                 f"""
-                SELECT e.id, e.project_id, e.worktree_id, e.task_id, e.kind, e.redacted_payload_json, e.created_at
+                SELECT e.id, e.project_id, e.worktree_id, e.task_id, e.source_agent, e.kind,
+                       e.redacted_payload_json, e.approved, p.hermes_approved, e.created_at
                 FROM events e
                 JOIN projects p ON p.id = e.project_id
                 WHERE {' AND '.join(clauses)}
@@ -872,62 +749,15 @@ class MemoryBridgeService:
                     "project_id": r["project_id"],
                     "worktree_id": r["worktree_id"],
                     "task_id": r["task_id"],
+                    "source_agent": r["source_agent"],
                     "kind": r["kind"],
+                    "approved": bool(r["approved"]),
+                    "external_llm_approved": bool(r["hermes_approved"]),
                     "payload": json.loads(r["redacted_payload_json"] or "{}"),
                     "created_at": r["created_at"],
                 }
                 for r in rows
             ]
-            return {"items": items}
-
-    def get_agents_status(self, project_id: str, worktree_id: str | None = None) -> dict[str, Any]:
-        """Aggregate latest observed AI agent status per (project_id, worktree_id, source_agent)."""
-        with self.db.read_conn() as conn:
-            if worktree_id:
-                self._ensure_worktree(conn, project_id, worktree_id)
-                wt_clause = "AND e.worktree_id = ?"
-                params: list[Any] = [project_id, worktree_id]
-            else:
-                self._ensure_project(conn, project_id)
-                wt_clause = ""
-                params = [project_id]
-
-            rows = conn.execute(
-                f"""
-                SELECT
-                    e.source_agent,
-                    e.kind AS last_kind,
-                    e.task_id,
-                    e.worktree_id,
-                    w.branch,
-                    w.head_commit,
-                    e.created_at AS last_seen_at
-                FROM events e
-                JOIN worktrees w ON w.id = e.worktree_id
-                WHERE e.project_id = ? {wt_clause} AND e.source_agent IS NOT NULL AND e.source_agent != ''
-                ORDER BY e.created_at DESC
-                """,
-                params,
-            ).fetchall()
-
-            seen: set[tuple[str, str]] = set()
-            items: list[dict[str, Any]] = []
-            for r in rows:
-                key = (r["worktree_id"], r["source_agent"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                items.append(
-                    {
-                        "source_agent": r["source_agent"],
-                        "last_kind": r["last_kind"],
-                        "task_id": r["task_id"],
-                        "worktree_id": r["worktree_id"],
-                        "branch": r["branch"],
-                        "head_commit": r["head_commit"],
-                        "last_seen_at": r["last_seen_at"],
-                    }
-                )
             return {"items": items}
 
     def submit_worker_result(self, req: WorkerResultRequest) -> tuple[int, dict[str, Any]]:
@@ -946,6 +776,16 @@ class MemoryBridgeService:
             if replay is not None:
                 return replay
 
+            if req.event_id:
+                ev_row = conn.execute(
+                    "SELECT approved FROM events WHERE id = ? AND project_id = ? AND worktree_id = ?",
+                    (str(req.event_id), project_id, worktree_id),
+                ).fetchone()
+                if ev_row and not ev_row["approved"]:
+                    raise BridgeError(403, "event_not_approved", "Event is not approved for worker processing")
+
+            safe_title = redact_secrets(req.title)
+            safe_body = redact_secrets(req.body)
             memory_id = str(uuid.uuid4())
             now = utc_now_iso()
             conn.execute(
@@ -960,8 +800,8 @@ class MemoryBridgeService:
                     project_id,
                     worktree_id,
                     req.type,
-                    req.title,
-                    req.body,
+                    safe_title,
+                    safe_body,
                     json.dumps(req.tags, ensure_ascii=False),
                     req.evidence_ref,
                     now,
@@ -970,7 +810,7 @@ class MemoryBridgeService:
             )
             conn.execute(
                 "INSERT INTO memories_fts (memory_id, project_id, worktree_id, title, body, tags) VALUES (?, ?, ?, ?, ?, ?)",
-                (memory_id, project_id, worktree_id, req.title, req.body, " ".join(req.tags)),
+                (memory_id, project_id, worktree_id, safe_title, safe_body, " ".join(req.tags)),
             )
             if req.event_id:
                 conn.execute(
@@ -1079,20 +919,62 @@ class MemoryBridgeService:
             ]
             return {"task_id": task_id, "items": items}
 
-    # --- Codebase proxy / mock ---
+    # --- Codebase proxy & index job sync ---
+    def _codebase_headers(self, *, admin: bool = False) -> dict[str, str]:
+        token = (
+            (self.settings.codebase_admin_token or self.settings.codebase_token)
+            if admin
+            else (self.settings.codebase_read_token or self.settings.codebase_token)
+        )
+        return {"Authorization": f"Bearer {token}"} if token else {}
+
+    def _sync_index_job_row(self, job_data: dict[str, Any]) -> None:
+        job_id = str(job_data.get("job_id") or "")
+        project_id = str(job_data.get("project_id") or "")
+        worktree_id = str(job_data.get("worktree_id") or "")
+        if not (job_id and project_id and worktree_id):
+            return
+        status = str(job_data.get("state") or job_data.get("status") or "unknown")
+        head_commit = job_data.get("head_commit")
+        dirty_fp = job_data.get("dirty_fingerprint") or ""
+        updated_at = str(job_data.get("updated_at") or utc_now_iso())
+        with self.db.write_tx() as conn:
+            conn.execute(
+                """
+                INSERT INTO index_jobs (id, project_id, worktree_id, status, head_commit, dirty_fingerprint, stale, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    status = excluded.status,
+                    head_commit = excluded.head_commit,
+                    dirty_fingerprint = excluded.dirty_fingerprint,
+                    updated_at = excluded.updated_at
+                """,
+                (job_id, project_id, worktree_id, status, head_commit, dirty_fp, updated_at),
+            )
+            if status == "succeeded":
+                conn.execute(
+                    """
+                    UPDATE worktrees
+                    SET mount_status = 'mounted',
+                        head_commit = COALESCE(?, head_commit),
+                        dirty_fingerprint = COALESCE(?, dirty_fingerprint),
+                        updated_at = ?
+                    WHERE id = ? AND project_id = ?
+                    """,
+                    (head_commit, dirty_fp, updated_at, worktree_id, project_id),
+                )
+
     def search_code(self, req: CodeSearchRequest) -> dict[str, Any]:
         t0 = time.perf_counter()
         project_id = str(req.project_id)
         worktree_id = str(req.worktree_id)
         with self.db.read_conn() as conn:
-            worktree = self._ensure_worktree(conn, project_id, worktree_id)
+            self._ensure_worktree(conn, project_id, worktree_id)
 
         if self.settings.codebase_url:
-            headers = {}
-            if self.settings.codebase_token:
-                headers["Authorization"] = f"Bearer {self.settings.codebase_token}"
+            headers = self._codebase_headers(admin=False)
             try:
-                with httpx.Client(timeout=5.0) as client:
+                with httpx.Client(timeout=10.0) as client:
                     resp = client.post(
                         f"{self.settings.codebase_url.rstrip('/')}/v1/search/code",
                         json=req.model_dump(mode="json"),
@@ -1109,6 +991,13 @@ class MemoryBridgeService:
                             result_chars=len(json.dumps(data, ensure_ascii=False)),
                         )
                         return data
+                    if resp.status_code in (404, 422):
+                        err = resp.json().get("error", {}) if resp.content else {}
+                        raise BridgeError(
+                            resp.status_code,
+                            str(err.get("code") or "codebase_error"),
+                            str(err.get("message") or "Codebase search rejected request"),
+                        )
             except httpx.HTTPError:
                 pass
 
@@ -1121,18 +1010,20 @@ class MemoryBridgeService:
             worktree = self._ensure_worktree(conn, project_id, worktree_id)
 
         if self.settings.codebase_url:
-            headers = {}
-            if self.settings.codebase_token:
-                headers["Authorization"] = f"Bearer {self.settings.codebase_token}"
+            headers = self._codebase_headers(admin=True)
             try:
-                with httpx.Client(timeout=5.0) as client:
+                with httpx.Client(timeout=60.0) as client:
                     resp = client.post(
                         f"{self.settings.codebase_url.rstrip('/')}/v1/index",
                         json=req.model_dump(mode="json"),
                         headers=headers,
                     )
                     if resp.status_code in (200, 202):
-                        return resp.json()
+                        data = resp.json()
+                        self._sync_index_job_row(data)
+                        if "status" not in data and "state" in data:
+                            data["status"] = data["state"]
+                        return data
             except httpx.HTTPError:
                 pass
 
@@ -1155,7 +1046,10 @@ class MemoryBridgeService:
             "updated_at": now,
         }
 
-    def get_index_job(self, job_id: str, project_id: str | None = None) -> dict[str, Any]:
+    def get_index_job(
+        self, job_id: str, project_id: str | None = None, worktree_id: str | None = None
+    ) -> dict[str, Any]:
+        local_row: dict[str, Any] | None = None
         with self.db.read_conn() as conn:
             if project_id:
                 row = conn.execute(
@@ -1164,9 +1058,33 @@ class MemoryBridgeService:
                 ).fetchone()
             else:
                 row = conn.execute("SELECT * FROM index_jobs WHERE id = ?", (job_id,)).fetchone()
-            if not row:
-                raise BridgeError(404, "index_job_not_found", "Index job not found")
-            return dict(row)
+            if row:
+                local_row = dict(row)
+
+        eff_pid = project_id or (local_row["project_id"] if local_row else None)
+        eff_wid = worktree_id or (local_row["worktree_id"] if local_row else None)
+        if self.settings.codebase_url and eff_pid and eff_wid:
+            headers = self._codebase_headers(admin=False)
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    resp = client.get(
+                        f"{self.settings.codebase_url.rstrip('/')}/v1/index/{job_id}",
+                        params={"project_id": eff_pid, "worktree_id": eff_wid},
+                        headers=headers,
+                    )
+                    if resp.status_code == 200:
+                        remote = resp.json()
+                        self._sync_index_job_row(remote)
+                        if "status" not in remote and "state" in remote:
+                            remote["status"] = remote["state"]
+                        return remote
+            except httpx.HTTPError:
+                pass
+
+        if local_row is None:
+            raise BridgeError(404, "index_job_not_found", "Index job not found")
+        local_row.setdefault("job_id", local_row["id"])
+        return local_row
 
     # --- Metrics (real measurements only) ---
     def get_metrics(self) -> dict[str, Any]:

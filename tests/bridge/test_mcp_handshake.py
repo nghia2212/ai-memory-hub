@@ -145,3 +145,41 @@ async def test_mcp_requires_auth_and_completes_handshake(running_bridge: str):
         )
         ctx_data = json.loads(ctx.content[0].text)
         assert ctx_data["project"]["project_id"] == pid
+
+    # Read-only token CAN read via MCP but MUST NOT execute write tools (save_decision / save_task_result)
+    read_transport = StreamableHttpTransport(
+        url=f"{running_bridge}/mcp",
+        headers={"Authorization": "Bearer tok-read"},
+    )
+    async with Client(read_transport) as read_client:
+        ctx = await read_client.call_tool(
+            "get_project_context",
+            {"project_id": pid, "worktree_id": wid},
+        )
+        assert json.loads(ctx.content[0].text)["project"]["project_id"] == pid
+
+        with pytest.raises(Exception):
+            await read_client.call_tool(
+                "save_decision",
+                {
+                    "project_id": pid,
+                    "worktree_id": wid,
+                    "title": "Unauthorized write",
+                    "summary": "Should be rejected for read token",
+                    "evidence": "test",
+                    "idempotency_key": "mcp-read-deny-1",
+                },
+            )
+
+        with pytest.raises(Exception):
+            await read_client.call_tool(
+                "save_task_result",
+                {
+                    "project_id": pid,
+                    "worktree_id": wid,
+                    "task_id": "DENY-01",
+                    "summary": "Should be rejected for read token",
+                    "evidence": {"ok": False},
+                    "idempotency_key": "mcp-read-deny-2",
+                },
+            )

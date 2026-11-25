@@ -28,6 +28,8 @@ class Settings:
     )
     codebase_url: str | None = field(default_factory=lambda: os.environ.get("CODEBASE_URL") or None)
     codebase_token: str | None = field(default_factory=lambda: os.environ.get("CODEBASE_TOKEN") or None)
+    codebase_read_token: str | None = field(default_factory=lambda: os.environ.get("CODEBASE_READ_TOKEN") or None)
+    codebase_admin_token: str | None = field(default_factory=lambda: os.environ.get("CODEBASE_ADMIN_TOKEN") or None)
     read_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_READ_TOKENS", "")))
     write_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_WRITE_TOKENS", "")))
     admin_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_ADMIN_TOKENS", "")))

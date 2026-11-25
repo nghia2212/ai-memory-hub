@@ -42,6 +42,28 @@ class WorktreeRegistry:
             entry = WorktreeEntry.model_validate(item)
             self.register(entry)
 
+    def _normalize_bridge_item(self, project_id: UUID, item: dict) -> dict:
+        normalized = dict(item)
+        normalized.setdefault("project_id", str(project_id))
+        if "worktree_id" not in normalized and "id" in normalized:
+            normalized["worktree_id"] = normalized["id"]
+        if not normalized.get("canonical_repo_id"):
+            normalized["canonical_repo_id"] = str(
+                normalized.get("canonical_identity") or normalized.get("project_id") or project_id
+            )
+        canonical_root = str(normalized.get("canonical_root") or "")
+        if not normalized.get("host_root"):
+            normalized["host_root"] = canonical_root or str(normalized.get("container_root") or "")
+        if not normalized.get("container_root"):
+            wt_id = str(normalized.get("worktree_id") or "")
+            allowed = self._settings.cbm_allowed_root
+            candidate = (allowed / wt_id) if (allowed and wt_id) else None
+            if candidate is not None and candidate.is_dir():
+                normalized["container_root"] = str(candidate)
+            else:
+                normalized["container_root"] = canonical_root
+        return normalized
+
     async def refresh_from_bridge(self, project_id: UUID) -> None:
         if not self._settings.bridge_url:
             return
@@ -54,9 +76,16 @@ class WorktreeRegistry:
                 resp = await client.get(url, headers=headers)
             if resp.status_code == 200:
                 payload = resp.json()
-                items = payload if isinstance(payload, list) else payload.get("worktrees", [])
+                if isinstance(payload, list):
+                    items = payload
+                elif isinstance(payload, dict):
+                    items = payload.get("items") or payload.get("worktrees") or []
+                else:
+                    items = []
                 for item in items:
-                    entry = WorktreeEntry.model_validate(item)
+                    if not isinstance(item, dict):
+                        continue
+                    entry = WorktreeEntry.model_validate(self._normalize_bridge_item(project_id, item))
                     self.register(entry)
         except Exception as exc:
             logger.warning("Bridge registry lookup failed: %s", type(exc).__name__)

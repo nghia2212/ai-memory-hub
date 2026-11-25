@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
@@ -22,9 +23,14 @@ SCOPE_RANK = {
 
 _FTS_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
 _SECRET_PATTERNS = [
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*['\"]?([A-Za-z0-9_\-\.]{6,})['\"]?"),
-    re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"),
-    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9\-_]{12,}\b"),
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z\-_]{20,}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]*\b"),
     re.compile(r"Bearer\s+[A-Za-z0-9_\-\.=]{12,}", re.IGNORECASE),
 ]
 
@@ -33,6 +39,9 @@ _SECRET_PATTERNS = [
 class AuthPrincipal:
     role: str
     scopes: frozenset[str]
+
+
+current_mcp_principal: ContextVar[AuthPrincipal | None] = ContextVar("current_mcp_principal", default=None)
 
 
 def authenticate_token(token: str | None, settings: Settings) -> AuthPrincipal:
