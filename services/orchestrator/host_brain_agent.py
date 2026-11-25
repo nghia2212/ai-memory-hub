@@ -498,11 +498,14 @@ def execute_approved_plan(
     stop = threading.Event()
     heartbeat = {"project_id": project_id, "lease_id": lease_id, "runner_id": runner_id, "lease_seconds": 300}
 
+    lost = threading.Event()
+
     def keep_alive():
         while not stop.wait(12):
             status, _ = _bridge_request(env, "POST", f"/v2/jobs/{job_id}/heartbeat",
                 token_key="BRIDGE_RUNNER_TOKEN", body=heartbeat, timeout=5)
-            if status == 409:
+            if status != 200:
+                lost.set()
                 break
 
     status, _ = _bridge_request(env, "POST", f"/v2/jobs/{job_id}/heartbeat",
@@ -529,6 +532,8 @@ def execute_approved_plan(
         stop.set()
         worker.join(timeout=6)
 
+    if lost.is_set():
+        return {"ok": False, "job_id": job_id, "session_id": session_id, "message": "Heartbeat lost; outcome unknown. Inspect before retry."}
     duration_ms = int((time.perf_counter() - t0) * 1000)
     quota_error = re.search(r"(?i)(?:quota exceeded|rate.limit exceeded|resource.exhausted|quota will reset)", (err or out)[:2000])
     succeeded = rc == 0 and bool(out) and not quota_error
