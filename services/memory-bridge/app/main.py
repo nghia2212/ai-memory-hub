@@ -35,6 +35,8 @@ from .security import AuthPrincipal, authenticate_token, current_mcp_principal, 
 from .service import MemoryBridgeService
 from .v2_routes import create_v2_router
 from .trace_routes import create_trace_router
+from .v3_routes import create_v3_router
+from .v3_service import V3BridgeService
 from .trace_operations import trace_parent, trace_transport
 from .v2_service import V2BridgeService
 
@@ -337,6 +339,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.v2_service = v2_service
     app.include_router(create_v2_router(v2_service, cfg))
     app.include_router(create_trace_router(db, cfg))
+    v3_service = V3BridgeService(db)
+    app.state.v3_service = v3_service
+    app.include_router(create_v3_router(v3_service, cfg))
 
     # Mount FastMCP Streamable HTTP app at /mcp
     app.mount("/mcp", mcp_app)
