@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from .trace_execution import build_execution_trace
 from .cli_runner import UnsafeCLIRequestError, build_cli_command, parse_cli_telemetry
 
 
@@ -244,9 +245,18 @@ class HostRunner:
                     return
         worker = threading.Thread(target=renew, daemon=True)
         worker.start()
+        trace_started = datetime.now(timezone.utc)
+        def report_trace(status, error=None, output=""):
+            try:
+                payload = build_execution_trace(job,trace_started,datetime.now(timezone.utc),status=status,error_code=error,stdout=output)
+                if payload and isinstance(self.bridge,HttpRunnerBridge):
+                    self.bridge._request("/v2/traces",payload=payload)
+            except Exception:
+                pass
         try:
             rc, stdout, _stderr = self._run_proc(cmd, cwd, timeout_s)
         except subprocess.TimeoutExpired:
+            report_trace("unknown", "timeout")
             self.bridge.checkpoint(
                 job_id,
                 {
@@ -257,9 +267,13 @@ class HostRunner:
                 },
             )
             return {"claimed": True, "job_id": job_id, "status": "failed", "reason": "timeout"}
+        except Exception as exc:
+            report_trace("failed",type(exc).__name__)
+            raise
         finally:
             stop.set()
             worker.join(timeout=12)
+        report_trace("unknown" if lost.is_set() else ("succeeded" if rc == 0 else "failed"), None if rc == 0 else f"cli_exit_{rc}", stdout)
         if lost.is_set():
             return {"claimed": True, "job_id": job_id, "status": "unknown", "reason": "heartbeat_failed"}
 
