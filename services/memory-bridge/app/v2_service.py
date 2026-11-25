@@ -12,7 +12,7 @@ from .db import DatabaseManager, reconcile_expired_job_leases, utc_now_iso
 from .errors import BridgeError
 from .security import redact_payload
 from .trace_usage import sync_usage_trace
-from .trace_lifecycle import plan_created, agent_claimed, agent_heartbeat, agent_finished
+from .trace_lifecycle import trace_key, plan_created, agent_claimed, agent_heartbeat, agent_finished
 from .v2_schemas import (
     BrainConfigUpdateRequest,
     BrainRoleConfig,
@@ -1343,6 +1343,7 @@ class V2BridgeService:
                           runner_id=req.runner_id, started_at=now, attempt_number=attempt_number)
             return {
                 "claimed": True,
+                "root_trace_id": conn.execute("SELECT root_trace_id FROM v22_execution_traces WHERE trace_id=?", (trace_key("attempt",attempt_id),)).fetchone()[0],
                 "job_id": chosen["id"],
                 "task_id": chosen["id"],
                 "task_key": chosen["task_key"],
