@@ -52,7 +52,17 @@ D:\workspace1\ai-memory-hub-agent-a\.venv\Scripts\python.exe -m pytest D:\worksp
 ## 4. Open Blockers & Integration Notes for Lead
 
 1. **Docker Desktop daemon on this Windows host:** `com.docker.service` is `Stopped` and `Disabled` (`Start=4`), so `docker build` / `docker compose up` could not be executed in this environment. The `v0.12.1` Linux binary itself was verified in WSL2 (`docker-desktop` distro). Lead should run `docker compose build codebase` and `docker compose up -d --wait` on a host with Docker Desktop running.
-2. **Suggested `docker-compose.yml` env wiring for `codebase` (Lead-owned):**
+2. **Volume startup fix for `read_only: true`:** `app/main.py` lifespan now ensures `DATA_DIR`, `CBM_CACHE_DIR`, and `HOME` directories exist inside `/data` before starting `codebase-memory-mcp`, avoiding permission/missing-dir issues if an existing `/data` volume from the scaffold is reused.
+3. **Suggested `docker-compose.yml` env wiring for `codebase` (Lead-owned):**
    - Pass `CODEBASE_READ_TOKENS`, `CODEBASE_ADMIN_TOKENS`, and `BRIDGE_URL=http://memory-bridge:8082` (or `REGISTRY_FILE`).
    - Mount each approved host worktree read-only (`:ro`) under `/repos/...` via host-generated compose override.
-3. **Host-side path mapping:** The adapter exposes `map_to_host_path(host_root, rel_posix_path)` and keeps `path` repository-relative in `/v1/search/code` responses per `INTERFACE-V1.md`.
+4. **Host-side path mapping:** The adapter exposes `map_to_host_path(host_root, rel_posix_path)` and keeps `path` repository-relative in `/v1/search/code` responses per `INTERFACE-V1.md`.
+
+## 5. V2 Readiness Notes (`docs/V2-AGENT-BOARD.md`, `docs/tasks/V2-AGENT-A.md`)
+
+- **Gate Status:** `lead/v2-orchestrator` does not exist yet on `origin`; all V2 tasks are `QUEUED` pending Lead review/integration of V1 PRs `#4`/`#3`/`#2`, Docker daemon verification, and frozen V2 schemas (`ORCHESTRATOR-V2.md`, `SESSION-ANALYTICS-V2.md`). Per `V2-AGENT-BOARD.md` ("Do not start feature branches from scaffold"), `agent/v2-model-registry` has not been created yet.
+- **Official Provider Docs Verified (2026-11-25) for V2 Catalog & Forecasting:**
+  - **Anthropic (`platform.claude.com`):** Mainline lineup (`claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`) with 1M context window, up to 128k output, tiered Haiku prompt-length pricing, prompt caching, and batch support.
+  - **OpenAI (`developers.openai.com`):** Prompt caching automatic >= 1,024 tokens (128-token increments), 30m default TTL (1.25x cache write) vs 12h extended TTL (2.5x cache write), ~90–95% cached read discount, long-context surcharge (>272k input), Batch/Flex ~50% discount.
+  - **Google Gemini (`ai.google.dev`):** Gemini 4 (Carbon, Argon, Neon, Hydrogen) & Gemini 3.x implicit caching (4,096 min tokens; Gemini 4 multi-turn requires >=2,050 new tokens to extend cache) vs Gemini 2.5/3 explicit caching (2,048/4,096 min tokens, TTL storage fee), 90–95% cache read discount.
+- **Ready on `lead/v2-orchestrator` creation:** Will branch `agent/v2-model-registry` and implement `services/orchestrator/catalog/**`, `services/orchestrator/routing/**`, `services/orchestrator/forecast/**`, and corresponding test suites (`tests/orchestrator/catalog/**`, `tests/orchestrator/forecast/**`).

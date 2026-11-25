@@ -245,6 +245,23 @@ def test_auth_scope_isolation_and_budget(tmp_path: Path) -> None:
         assert r_idx1.status_code == 200
         assert r_idx1.json()["no_op"] is False
         assert len(fake_cbm.index_calls) == 1
+        job_id = r_idx1.json()["job_id"]
+
+        # GET /v1/index/{job_id} in-scope 200 and cross-scope 404
+        r_job_ok = client.get(
+            f"/v1/index/{job_id}",
+            headers={"Authorization": "Bearer read-tok"},
+            params={"project_id": str(p_a), "worktree_id": str(w_a)},
+        )
+        assert r_job_ok.status_code == 200
+        assert r_job_ok.json()["job_id"] == job_id
+
+        r_job_cross = client.get(
+            f"/v1/index/{job_id}",
+            headers={"Authorization": "Bearer read-tok"},
+            params={"project_id": str(p_b), "worktree_id": str(w_b)},
+        )
+        assert r_job_cross.status_code == 404
 
         # Second index without changes -> no_op (no full reindex on session start)
         r_idx2 = client.post(

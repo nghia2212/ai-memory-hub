@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -63,6 +64,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        cfg.data_dir.mkdir(parents=True, exist_ok=True)
+        cfg.cbm_cache_dir.mkdir(parents=True, exist_ok=True)
+        home_env = os.environ.get("HOME")
+        if home_env:
+            Path(home_env).mkdir(parents=True, exist_ok=True)
         store.init()
         if cbm.is_ready():
             try:
