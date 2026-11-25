@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+config/projects.local.yaml
+config/*.local.*
+data/
+backups/
+logs/
+*.db
+*.db-*
+*.sqlite*
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/

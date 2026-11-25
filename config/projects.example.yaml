@@ -1,0 +1,13 @@
+# Example only; copy to projects.local.yaml and use your actual paths.
+projects:
+  - id: example-project
+    host_root: 'D:\workspace\example-project'
+    container_root: /repos/example-project
+    external_summarization: false
+    exclude:
+      - .env*
+      - '**/*.pem'
+      - '**/*.key'
+      - node_modules/**
+      - dist/**
+      - '**/credentials*'
