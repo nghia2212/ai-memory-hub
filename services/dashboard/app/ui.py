@@ -390,9 +390,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
         <label>Prompt / Mục tiêu nhiệm vụ</label>
-        <textarea id="plan-objective" rows="2" placeholder="Ví dụ: Kiểm tra nhanh trạng thái kiến trúc module nhân vật và tóm tắt rủi ro"></textarea>
+        <textarea id="plan-objective" rows="5" placeholder="Ví dụ: Kiểm tra nhanh trạng thái kiến trúc module nhân vật và tóm tắt rủi ro"></textarea>
+        <div class="row-actions prompt-tools"><span id="plan-char-count" aria-live="polite">0 / 32.000</span><button type="button" class="secondary" id="plan-expand">Mở rộng soạn thảo</button><button type="button" class="secondary" id="plan-import">Nhập TXT / MD</button><input type="file" id="plan-file" accept=".txt,.md,.markdown" hidden><button type="button" class="secondary" id="plan-clear">Xóa bản nháp</button><span id="plan-draft-state" aria-live="polite"></span></div>
         <div class="row-actions" style="margin-top:8px">
-          <button class="primary" style="margin-top:0" onclick="analyzeAndCreatePlan()">Phân tích &amp; Tạo kế hoạch (Chờ duyệt)</button>
+          <button id="plan-submit" class="primary" style="margin-top:0" onclick="analyzeAndCreatePlan()">Phân tích &amp; Tạo kế hoạch (Chờ duyệt)</button>
           <button class="secondary" onclick="loadPlans()">Tải danh sách kế hoạch</button>
         </div>
       </div>
@@ -1077,13 +1078,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const wid = document.getElementById("plans-wt").value;
       const obj = document.getElementById("plan-objective").value.trim();
       const comp = document.getElementById("plan-complexity").value || null;
+      if (Array.from(obj).length > 32000) { toast("Prompt vượt 32.000 ký tự. Hãy rút gọn hoặc chia nhiệm vụ."); return; }
       if (!pid || !wid || !obj) { toast("Vui lòng chọn dự án, worktree và nhập Prompt"); return; }
       try {
         const res = await apiFetch("/api/v2/plans/analyze", {
           method: "POST",
           body: JSON.stringify({ project_id: pid, worktree_id: wid, objective: obj, complexity: comp })
         });
-        document.getElementById("plan-objective").value = "";
+        const editor = document.getElementById("plan-objective");
+        if (editor.value.trim() === obj && document.getElementById("plans-proj").value === pid && document.getElementById("plans-wt").value === wid) { editor.value = ""; editor.dispatchEvent(new Event("input")); }
         toast("Đã phân tích & tạo kế hoạch chờ phê duyệt (REVIEW_REQUIRED)");
         await loadPlans();
       } catch (e) { toast("Lỗi tạo kế hoạch: " + e.message); }
