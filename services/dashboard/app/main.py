@@ -214,7 +214,7 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_traces(request: Request):
         if not verify_session_token(request.cookies.get(SESSION_COOKIE_NAME), cfg.session_secret):
             raise HTTPException(401, "Session required")
-        allowed = {"project_id","worktree_id","plan_id","task_id","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset"}
+        allowed = {"project_id","worktree_id","plan_id","task_id","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
         return await _proxy_bridge("GET","/v2/traces",params={k:v for k,v in request.query_params.items() if k in allowed})
 
     @app.get("/api/v2/traces/{trace_id}")
