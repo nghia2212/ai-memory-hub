@@ -44,7 +44,7 @@ def create_trace_router(db, cfg):
         return item
 
     @router.post("", status_code=201)
-    def ingest(req: TraceEvent, p=Depends(writer)):
+    def ingest(req: TraceEvent, request: Request, p=Depends(writer)):
         data = redact_payload(req.model_dump(mode="json"))
         # Normalize UTC representation consistently for lexicographic time filtering.
         for key in ("started_at","ended_at"):
@@ -53,6 +53,20 @@ def create_trace_router(db, cfg):
         project, worktree = data["project_id"], data["worktree_id"]
         with db.write_tx() as conn:
             check_scope(conn, project, worktree)
+            if p == "trace_only":
+                # Adapter may correlate only to an existing parent in its registered scope.
+                if data["step_type"] not in ("mcp_tool_call","local_rule") or data["actor_id"] != "codebase-adapter":
+                    raise BridgeError(403,"trace_role","Adapter trace types only")
+                if any(data[k] is not None for k in ("parent_trace_id","plan_id","task_id","attempt_id","session_id","input_tokens","output_tokens","cache_read_tokens","cache_write_tokens","reasoning_tokens","cost_usd")):
+                    raise BridgeError(403,"trace_role","Adapter cannot supply linked records or usage")
+                hint = request.headers.get("X-Trace-Parent")
+                if hint:
+                    parent = conn.execute("SELECT * FROM v22_execution_traces WHERE trace_id=? AND project_id=? AND worktree_id=?", (hint,project,worktree)).fetchone()
+                    if parent:
+                        data["parent_trace_id"] = parent["trace_id"]
+                        data["root_trace_id"] = parent["root_trace_id"]
+                        for key in ("plan_id","task_id","attempt_id","session_id"):
+                            data[key] = parent[key]
             for field, table in (("plan_id","v2_plans"),("task_id","v2_tasks"),("session_id","v2_sessions")):
                 if data[field]:
                     record = conn.execute(f"SELECT * FROM {table} WHERE id=? AND project_id=? AND worktree_id=?", (data[field],project,worktree)).fetchone()
