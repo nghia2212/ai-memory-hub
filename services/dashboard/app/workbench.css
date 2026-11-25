@@ -23,3 +23,6 @@
 .trace-fields{display:grid;grid-template-columns:minmax(80px,1fr) minmax(0,2fr);gap:6px;font-size:12px}
 .trace-fields dt{opacity:.8}.trace-fields dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .trace-links{display:flex;flex-wrap:wrap;gap:6px}.trace-layout>*{min-width:0}
+
+/* V2.2.1 compact plan layout */
+#plans-list{max-height:440px;overflow:auto}.history-item{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;min-height:40px}.plan-objective-card h3{overflow-wrap:anywhere}.plan-objective-details{margin:8px 0}.plan-objective-details summary{cursor:pointer;color:var(--accent)}.plan-objective-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;font-size:14px;font-weight:normal}#task-detail table button{white-space:nowrap;min-width:56px}#task-detail table{table-layout:auto}#task-detail textarea{min-height:100px;max-height:280px;resize:vertical}
