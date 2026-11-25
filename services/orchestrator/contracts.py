@@ -217,3 +217,63 @@ class BrainAdapter(Protocol):
 
     def invoke(self, request: BrainRequest) -> BrainResponse:
         ...
+
+
+# --- Host Capability Discovery & Adaptive Brain Dashboard Contracts ---
+class HostCLICapability(StrictV2Model):
+    cli_name: str = Field(min_length=1, max_length=64)
+    installed: bool
+    version: str | None = None
+    auth_mode: AuthMode = "unknown"
+    noninteractive_supported: bool = False
+    structured_json_supported: bool = False
+    verified_model_ids: list[str] = Field(default_factory=list)
+    supported_telemetry_fields: list[str] = Field(default_factory=list)
+    unsupported_fields: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    verified_at: str
+
+
+class HostCapabilityReport(StrictV2Model):
+    host_os: str
+    discovered_at: str
+    clis: list[HostCLICapability] = Field(default_factory=list)
+
+
+class BrainRoleConfig(StrictV2Model):
+    role_name: BrainRole
+    preferred_label: str | None = None
+    effective_provider: str | None = None
+    effective_model_id: str | None = None
+    effective_effort: str | None = None
+    auth_mode: AuthMode = "unknown"
+    availability_status: Literal["verified", "unavailable", "unverified", "deprecated"] = "unverified"
+    availability_reason: str | None = None
+    fallback_order: list[str] = Field(default_factory=list)
+    max_escalations: int = Field(default=1, ge=0, le=5)
+    last_verified_at: str | None = None
+
+
+class BrainPolicyConfig(StrictV2Model):
+    project_id: UUID
+    approval_mode: Literal["REVIEW_REQUIRED", "AUTO_SCOPED"] = "REVIEW_REQUIRED"
+    daily_planner_budget_usd: float | None = Field(default=None, ge=0.0)
+    allow_paid_api_fallback: bool = False
+    allowed_auth_modes: list[AuthMode] = Field(default_factory=lambda: ["subscription_cli"])
+    roles: list[BrainRoleConfig] = Field(default_factory=list)
+
+
+class BrainTokenAccounting(StrictV2Model):
+    """Separate planner vs executor accounting; never merge or fabricate missing counters."""
+
+    project_id: UUID
+    planner_input_tokens: int | None = Field(default=None, ge=0)
+    planner_output_tokens: int | None = Field(default=None, ge=0)
+    planner_cache_read_tokens: int | None = Field(default=None, ge=0)
+    planner_cost_usd: float | None = Field(default=None, ge=0.0)
+    executor_input_tokens: int | None = Field(default=None, ge=0)
+    executor_output_tokens: int | None = Field(default=None, ge=0)
+    executor_cache_read_tokens: int | None = Field(default=None, ge=0)
+    executor_cost_usd: float | None = Field(default=None, ge=0.0)
+    measurement_kind: MeasurementKind = "unavailable"
+    observed_at: str | None = None

@@ -7,6 +7,7 @@
   - API Contract: `docs/INTERFACE-V2.md`
   - SQLite Schema DDL (Migration v3+): `docs/SCHEMA-V2.sql`
   - Shared Pydantic Types & `BrainAdapter` Protocol: `services/orchestrator/contracts.py`
+  - Verified Host CLI & Antigravity Model Discovery: `docs/evidence/host-brain-discovery-v2.md`
   - Requirements: `docs/ORCHESTRATOR-V2.md`, `docs/SESSION-ANALYTICS-V2.md`, `docs/ADAPTIVE-BRAIN-V2.md`
 
 ## Trạng thái phân công 3 Agent

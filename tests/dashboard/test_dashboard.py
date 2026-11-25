@@ -92,6 +92,9 @@ def test_dashboard_html_vietnamese_and_no_secrets(dash_client: TestClient):
     html = dash_client.get("/").text
     assert "Bảng điều khiển quản trị" in html
     assert "Duyệt bộ nhớ" in html
+    assert "Bộ não điều phối" in html
+    assert "Điều phối (Planner)" in html
+    assert "Không có dữ liệu" in html
     assert "Sao lưu & Khôi phục" in html
     assert "secret-admin-token" not in html
     assert "secret-read-token" not in html
@@ -163,3 +166,26 @@ def test_dashboard_auth_origin_csrf_and_proxy(dash_client: TestClient):
     agents_st = dash_client.get(f"/api/agents/status?project_id={pid}")
     assert agents_st.status_code == 200
     assert agents_st.json()["items"] == []
+
+    # V2 Adaptive Brain config & separate Planner/Executor usage endpoints
+    brain_cfg = dash_client.get(f"/api/v2/brain/config?project_id={pid}")
+    assert brain_cfg.status_code == 200
+    cfg_data = brain_cfg.json()
+    assert cfg_data["approval_mode"] == "REVIEW_REQUIRED"
+    assert cfg_data["allow_paid_api_fallback"] is False
+    roles = {r["role_name"]: r for r in cfg_data["roles"]}
+    assert roles["tier2_primary"]["preferred_label"] == "Gemini 4 Neon Medium"
+    assert roles["tier2_primary"]["availability_status"] == "unavailable"
+
+    v2_usage = dash_client.get(f"/api/v2/usage?project_id={pid}")
+    assert v2_usage.status_code == 200
+    assert v2_usage.json()["planner"]["input_tokens"] is None
+    assert v2_usage.json()["executor"]["input_tokens"] is None
+
+    # Unauthenticated PUT /api/v2/brain/config must be rejected (403 CSRF missing)
+    r_brain_no_csrf = dash_client.put(
+        "/api/v2/brain/config",
+        headers={"Origin": "http://testserver"},
+        json={"project_id": pid, "approval_mode": "REVIEW_REQUIRED"},
+    )
+    assert r_brain_no_csrf.status_code == 403

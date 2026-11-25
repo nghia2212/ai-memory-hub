@@ -208,6 +208,108 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("POST", "/v1/restore", use_admin=True, json_body=await request.json())
 
+    # --- V2 Adaptive Brain & Planner Token Accounting Proxy Routes ---
+    @app.get("/api/v2/brain/config")
+    async def api_v2_brain_config(project_id: str) -> JSONResponse:
+        resp = await _proxy_bridge("GET", "/v2/brain/config", params={"project_id": project_id})
+        if resp.status_code == 404:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "available": False,
+                    "project_id": project_id,
+                    "approval_mode": "REVIEW_REQUIRED",
+                    "daily_planner_budget_usd": None,
+                    "allow_paid_api_fallback": False,
+                    "roles": [
+                        {
+                            "role_name": "tier0_rules",
+                            "preferred_label": "Quy tắc cục bộ (0 LLM)",
+                            "effective_provider": "local",
+                            "effective_model_id": "deterministic-rules",
+                            "auth_mode": "unknown",
+                            "availability_status": "verified",
+                            "availability_reason": "Luôn sẵn sàng cục bộ, không tốn token",
+                            "fallback_order": [],
+                        },
+                        {
+                            "role_name": "tier1_light",
+                            "preferred_label": "Gemini 4 Hydrogen",
+                            "effective_provider": None,
+                            "effective_model_id": None,
+                            "auth_mode": "subscription_cli",
+                            "availability_status": "unavailable",
+                            "availability_reason": "Chưa xuất hiện trong agy models v1.1.27; gợi ý xác minh: gemini-3.8-flash-medium",
+                            "fallback_order": ["gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
+                        },
+                        {
+                            "role_name": "tier2_primary",
+                            "preferred_label": "Gemini 4 Neon Medium",
+                            "effective_provider": None,
+                            "effective_model_id": None,
+                            "auth_mode": "subscription_cli",
+                            "availability_status": "unavailable",
+                            "availability_reason": "Chưa xuất hiện trong agy models v1.1.27; cần xác minh hoặc duyệt thay thế: claude-sonnet-5-5-medium",
+                            "fallback_order": ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high"],
+                        },
+                        {
+                            "role_name": "tier3_advanced",
+                            "preferred_label": "Gemini 4 Carbon / Claude Opus 5.5",
+                            "effective_provider": "agy",
+                            "effective_model_id": "claude-opus-5-5-medium",
+                            "auth_mode": "subscription_cli",
+                            "availability_status": "verified",
+                            "availability_reason": "Carbon chưa có trên CLI; claude-opus-5-5-medium đã xác minh qua agy models",
+                            "fallback_order": ["claude-opus-5-5-medium", "claude-opus-5-5-high"],
+                        },
+                        {
+                            "role_name": "secondary_fallback",
+                            "preferred_label": "Claude Sonnet 5.5 Medium (DeepSeek opt-in)",
+                            "effective_provider": "agy",
+                            "effective_model_id": "claude-sonnet-5-5-medium",
+                            "auth_mode": "subscription_cli",
+                            "availability_status": "verified",
+                            "availability_reason": "Đã xác minh qua agy models; DeepSeek API tắt mặc định",
+                            "fallback_order": ["claude-sonnet-5-5-medium"],
+                        },
+                    ],
+                },
+            )
+        return resp
+
+    @app.put("/api/v2/brain/config")
+    async def api_v2_brain_config_update(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PUT", "/v2/brain/config", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v2/usage")
+    async def api_v2_usage(project_id: str) -> JSONResponse:
+        resp = await _proxy_bridge("GET", "/v2/usage", params={"project_id": project_id})
+        if resp.status_code == 404:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "available": False,
+                    "project_id": project_id,
+                    "planner": {
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "cache_read_tokens": None,
+                        "cost_usd": None,
+                        "measurement_kind": "unavailable",
+                    },
+                    "executor": {
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "cache_read_tokens": None,
+                        "cost_usd": None,
+                        "measurement_kind": "unavailable",
+                    },
+                    "quotas": [],
+                },
+            )
+        return resp
+
     return app
 
 

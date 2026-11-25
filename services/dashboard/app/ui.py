@@ -152,6 +152,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button onclick="showTab('handoffs', this)">Lịch sử & Handoff</button>
     <button onclick="showTab('events', this)">Sự kiện & Kinh nghiệm</button>
     <button onclick="showTab('hermes', this)">Cấu hình Hermes</button>
+    <button onclick="showTab('brain', this)">Bộ não điều phối</button>
     <button onclick="showTab('backup', this)">Sao lưu & Khôi phục</button>
     <button onclick="showTab('metrics', this)">Thống kê & Chi phí</button>
   </nav>
@@ -284,6 +285,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <h2>Trạng thái cấu hình Hermes (Opt-in theo dự án)</h2>
         <p style="color:var(--muted)">Mặc định từ chối gửi dữ liệu ra ngoài. Chỉ các dự án bật <code>hermes_approved</code> và sự kiện đã duyệt/che bí mật mới vào hàng đợi worker.</p>
         <div id="hermes-status"></div>
+      </div>
+    </section>
+
+    <!-- 7b. Bộ não điều phối (V2 Adaptive AI Brain) -->
+    <section id="tab-brain" class="panel">
+      <div class="card" style="margin-bottom:16px">
+        <h2>Bộ não điều phối (Adaptive AI Brain)</h2>
+        <p style="color:var(--muted)">Phân tách rõ <strong>ưu tiên cấu hình</strong> và <strong>model hiệu lực đã xác minh qua CLI/API</strong>. Mặc định yêu cầu phê duyệt thủ công (<code>REVIEW_REQUIRED</code>), không tự động fallback sang API trả phí.</p>
+        <div class="row-actions">
+          <select id="brain-proj" style="max-width:320px" onchange="loadBrainPanel()"></select>
+          <button class="secondary" onclick="loadBrainPanel()">Làm mới cấu hình bộ não</button>
+        </div>
+        <div id="brain-roles-view" style="margin-top:12px">Chọn dự án để xem phân cấp bộ não điều phối.</div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Cập nhật chính sách điều phối (Quản trị)</h3>
+          <label>Chế độ phê duyệt</label>
+          <select id="brain-approval-mode">
+            <option value="REVIEW_REQUIRED">Phê duyệt thủ công (REVIEW_REQUIRED — Mặc định)</option>
+            <option value="AUTO_SCOPED">Tự động có giới hạn (AUTO_SCOPED)</option>
+          </select>
+          <label>Ngân sách điều phối hàng ngày (USD, để trống nếu không giới hạn API)</label>
+          <input id="brain-planner-budget" type="number" step="0.01" min="0" placeholder="Ví dụ: 2.00" />
+          <label><input id="brain-paid-fallback" type="checkbox" style="width:auto" /> Cho phép fallback sang API trả phí (DeepSeek — Tắt mặc định)</label>
+          <button class="primary" onclick="saveBrainPolicy()">Lưu cấu hình bộ não</button>
+        </div>
+        <div class="card">
+          <h3>Thống kê riêng Token Điều phối (Planner) vs Thực thi (Executor)</h3>
+          <div id="brain-usage-view">Chưa có dữ liệu đo thực tế.</div>
+        </div>
       </div>
     </section>
 
@@ -420,7 +452,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const data = await apiFetch("/api/projects");
         projectsCache = data.items || [];
-        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj"];
+        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj"];
         for (const sid of selects) {
           const sel = document.getElementById(sid);
           const prev = sel.value;
@@ -614,6 +646,66 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } catch (e) { toast("Lỗi khôi phục: " + e.message); }
     }
 
+    async function loadBrainPanel() {
+      const pid = document.getElementById("brain-proj").value;
+      if (!pid) {
+        document.getElementById("brain-roles-view").innerHTML = `<p style="color:var(--muted)">Chưa có dự án đăng ký. Hãy đăng ký dự án trước.</p>`;
+        return;
+      }
+      try {
+        const [cfg, usage] = await Promise.all([
+          apiFetch(`/api/v2/brain/config?project_id=${encodeURIComponent(pid)}`),
+          apiFetch(`/api/v2/usage?project_id=${encodeURIComponent(pid)}`)
+        ]);
+        document.getElementById("brain-approval-mode").value = cfg.approval_mode || "REVIEW_REQUIRED";
+        document.getElementById("brain-planner-budget").value = cfg.daily_planner_budget_usd ?? "";
+        document.getElementById("brain-paid-fallback").checked = Boolean(cfg.allow_paid_api_fallback);
+        const rows = (cfg.roles || []).map(r => {
+          const badgeCls = r.availability_status === "verified" ? "ok" : (r.availability_status === "unavailable" ? "err" : "warn");
+          return `<tr>
+            <td><code>${r.role_name}</code></td>
+            <td>${r.preferred_label || "Không có dữ liệu"}</td>
+            <td>${r.effective_model_id ? `<code>${r.effective_provider || ""}/${r.effective_model_id}</code>` : "<span class='badge warn'>Chưa có model hiệu lực</span>"}</td>
+            <td><span class="badge ${badgeCls}">${r.availability_status}</span><br/><small style="color:var(--muted)">${r.availability_reason || ""}</small></td>
+            <td>${(r.fallback_order || []).join(" → ") || "Không có"}</td>
+          </tr>`;
+        }).join("");
+        document.getElementById("brain-roles-view").innerHTML =
+          `<table><tr><th>Vai trò</th><th>Ưu tiên cấu hình</th><th>Model hiệu lực</th><th>Khả dụng & Lý do</th><th>Dự phòng</th></tr>${rows}</table>`;
+
+        const fmt = (v) => (v === null || v === undefined ? "Không có dữ liệu" : String(v));
+        const p = usage.planner || {};
+        const ex = usage.executor || {};
+        document.getElementById("brain-usage-view").innerHTML = `
+          <table>
+            <tr><th>Nhóm</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Chi phí (USD)</th><th>Nguồn đo</th></tr>
+            <tr><td><strong>Điều phối (Planner)</strong></td><td>${fmt(p.input_tokens)}</td><td>${fmt(p.output_tokens)}</td><td>${fmt(p.cache_read_tokens)}</td><td>${fmt(p.cost_usd)}</td><td>${fmt(p.measurement_kind)}</td></tr>
+            <tr><td><strong>Thực thi (Executor)</strong></td><td>${fmt(ex.input_tokens)}</td><td>${fmt(ex.output_tokens)}</td><td>${fmt(ex.cache_read_tokens)}</td><td>${fmt(ex.cost_usd)}</td><td>${fmt(ex.measurement_kind)}</td></tr>
+          </table>
+          <p style="margin-top:8px;color:var(--muted)">Hạn mức gói (Subscription Quota): <strong>Không có dữ liệu</strong> (không suy diễn từ số token hay cửa sổ ngữ cảnh).</p>
+        `;
+      } catch (e) { toast("Lỗi tải Bộ não điều phối: " + e.message); }
+    }
+
+    async function saveBrainPolicy() {
+      const pid = document.getElementById("brain-proj").value;
+      if (!pid) { toast("Vui lòng chọn dự án"); return; }
+      const rawBudget = document.getElementById("brain-planner-budget").value;
+      try {
+        await apiFetch("/api/v2/brain/config", {
+          method: "PUT",
+          body: JSON.stringify({
+            project_id: pid,
+            approval_mode: document.getElementById("brain-approval-mode").value,
+            daily_planner_budget_usd: rawBudget === "" ? null : Number(rawBudget),
+            allow_paid_api_fallback: document.getElementById("brain-paid-fallback").checked
+          })
+        });
+        toast("Đã lưu cấu hình Bộ não điều phối");
+        await loadBrainPanel();
+      } catch (e) { toast("Lỗi lưu cấu hình: " + e.message); }
+    }
+
     async function loadMetrics() {
       try {
         const m = await apiFetch("/api/metrics");
@@ -632,6 +724,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await checkSession();
       await loadOverview();
       await loadProjects();
+      await loadBrainPanel();
       await loadBackups();
       await loadMetrics();
     });
