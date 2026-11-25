@@ -660,12 +660,55 @@ class V31McpGatewayService:
                 self._stdio_pool[server_id] = proc
             return proc
 
+    def _host_bridge_config(self) -> tuple[str, str] | None:
+        url = (os.environ.get("HOST_BRAIN_URL") or "").strip().rstrip("/")
+        tok = (os.environ.get("BRIDGE_RUNNER_TOKEN") or "").strip()
+        if not tok and self.cfg and getattr(self.cfg, "runner_tokens", None):
+            tok = next(iter(self.cfg.runner_tokens), "")
+        if url and tok:
+            return url, tok
+        return None
+
+    def _should_use_host_stdio_bridge(self, exe: str) -> bool:
+        """Delegate STDIO MCP to Windows Host Runner when running in Docker without the binary locally."""
+        if not _IN_DOCKER:
+            return False
+        if self._which(exe):
+            return False
+        return self._host_bridge_config() is not None
+
+    def _call_host_stdio_bridge(self, action: str, payload: dict[str, Any], timeout: float = 35.0) -> dict[str, Any]:
+        cfg_pair = self._host_bridge_config()
+        if not cfg_pair:
+            raise RuntimeError("Host Brain Agent bridge is not configured (HOST_BRAIN_URL / BRIDGE_RUNNER_TOKEN).")
+        base_url, tok = cfg_pair
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(
+                f"{base_url}/host/mcp/{action}",
+                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+                json=payload,
+            )
+            data = r.json() if r.content else {}
+            if r.status_code == 404 and (data.get("error") or {}).get("code") == "not_installed_on_host":
+                raise FileNotFoundError((data.get("error") or {}).get("message") or "Executable not installed on host")
+            if r.status_code == 504:
+                raise TimeoutError((data.get("error") or {}).get("message") or "Host MCP timeout")
+            if r.status_code >= 400:
+                msg = (data.get("error") or {}).get("message") or f"Host MCP bridge HTTP {r.status_code}"
+                raise RuntimeError(msg)
+            return data
+
     def stop_server_process(self, server_id: str) -> dict[str, Any]:
-        """Gracefully stop ONLY Hub-owned STDIO process."""
+        """Gracefully stop ONLY Hub-owned STDIO process (local or via Host Runner bridge)."""
         with self._pool_lock:
             proc = self._stdio_pool.pop(server_id, None)
         if proc is not None:
             proc.stop()
+        if _IN_DOCKER and self._host_bridge_config() is not None:
+            try:
+                self._call_host_stdio_bridge("stop", {"server_id": server_id}, timeout=8.0)
+            except Exception:
+                pass
         with self.db.write_tx() as conn:
             conn.execute(
                 "UPDATE v31_mcp_server_ext SET process_pid = NULL, process_status = 'stopped', updated_at = ? WHERE server_id = ?",
@@ -737,6 +780,28 @@ class V31McpGatewayService:
                     if not exe:
                         status = "not_configured"
                         err_code = "missing_executable"
+                    elif self._should_use_host_stdio_bridge(exe):
+                        try:
+                            hres = self._call_host_stdio_bridge(
+                                "health",
+                                {
+                                    "server_id": server_id,
+                                    "executable": exe,
+                                    "args": args,
+                                    "working_dir": cwd,
+                                    "env_allowlist": env_allow,
+                                    "secret_refs": secret_refs,
+                                    "timeout_sec": max(timeout, 25.0),
+                                },
+                                timeout=max(timeout, 30.0) + 5.0,
+                            )
+                            status = hres.get("health_status") or "ready"
+                            proc_pid = hres.get("process_pid")
+                            proc_status = hres.get("process_status") or "running"
+                        except FileNotFoundError as exc:
+                            status = "not_installed"
+                            err_code = "not_installed_on_host"
+                            err_msg = str(exc)
                     else:
                         proc = self._get_or_create_stdio(server_id, exe, args, cwd, self._build_stdio_env(env_allow, secret_refs))
                         proc.ensure_initialized(timeout=min(timeout, 10.0))
@@ -837,9 +902,29 @@ class V31McpGatewayService:
             args = json.loads(ext["args_json"] if ext else "[]")
             env_allow = json.loads(ext["env_allowlist_json"] if ext else "[]")
             cwd = ext["working_dir"] if ext else ""
-            proc = self._get_or_create_stdio(server_id, exe, args, cwd, self._build_stdio_env(env_allow, secret_refs))
-            discovered = proc.list_tools(timeout=timeout)
-            proto_ver = proc.protocol_version
+            if self._should_use_host_stdio_bridge(exe):
+                try:
+                    dres = self._call_host_stdio_bridge(
+                        "discover",
+                        {
+                            "server_id": server_id,
+                            "executable": exe,
+                            "args": args,
+                            "working_dir": cwd,
+                            "env_allowlist": env_allow,
+                            "secret_refs": secret_refs,
+                            "timeout_sec": max(timeout, 30.0),
+                        },
+                        timeout=max(timeout, 35.0) + 5.0,
+                    )
+                    discovered = dres.get("tools") or []
+                    proto_ver = str(dres.get("protocol_version") or "2024-11-05")
+                except Exception as exc:
+                    raise BridgeError(502, "host_mcp_discovery_failed", f"Host STDIO MCP discovery failed: {exc}") from exc
+            else:
+                proc = self._get_or_create_stdio(server_id, exe, args, cwd, self._build_stdio_env(env_allow, secret_refs))
+                discovered = proc.list_tools(timeout=timeout)
+                proto_ver = proc.protocol_version
         elif transport == "streamable_http":
             ep, headers = self._resolve_effective_http_target(srv, secret_refs)
             try:
@@ -1148,8 +1233,26 @@ class V31McpGatewayService:
                             args = json.loads(ext["args_json"] if ext else "[]")
                             env_allow = json.loads(ext["env_allowlist_json"] if ext else "[]")
                             cwd = ext["working_dir"] if ext else ""
-                            proc = self._get_or_create_stdio(req.server_id, exe, args, cwd, self._build_stdio_env(env_allow, secret_refs))
-                            result_obj = proc.call_tool(req.tool_name, req.arguments, timeout=timeout)
+                            if self._should_use_host_stdio_bridge(exe):
+                                ires = self._call_host_stdio_bridge(
+                                    "invoke",
+                                    {
+                                        "server_id": req.server_id,
+                                        "executable": exe,
+                                        "args": args,
+                                        "working_dir": cwd,
+                                        "env_allowlist": env_allow,
+                                        "secret_refs": secret_refs,
+                                        "tool_name": req.tool_name,
+                                        "arguments": req.arguments,
+                                        "timeout_sec": max(timeout, 30.0),
+                                    },
+                                    timeout=max(timeout, 45.0) + 5.0,
+                                )
+                                result_obj = ires.get("result") or {}
+                            else:
+                                proc = self._get_or_create_stdio(req.server_id, exe, args, cwd, self._build_stdio_env(env_allow, secret_refs))
+                                result_obj = proc.call_tool(req.tool_name, req.arguments, timeout=timeout)
                         elif transport == "streamable_http":
                             ep, headers = self._resolve_effective_http_target(srv, secret_refs)
                             result_obj = _http_mcp_call_tool(ep, headers, req.tool_name, req.arguments, timeout=timeout)

@@ -699,20 +699,310 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
                 self._send(200 if res["ok"] else 409, res)
                 return
 
+            if self.path in ("/host/mcp/health", "/host/mcp/discover", "/host/mcp/invoke", "/host/mcp/stop"):
+                action = self.path.rsplit("/", 1)[-1]
+                code, res = _handle_host_mcp_stdio(env, action, body)
+                self._send(code, res)
+                return
+
             self._send(404, {"error": {"code": "not_found", "message": "Not found"}})
 
     return Handler
 
 
+# ==================== ON-DEMAND WINDOWS HOST STDIO MCP BRIDGE ====================
+_ALLOWED_MCP_EXECUTABLES = frozenset({"npx", "node", "uvx", "python", "github-mcp-server"})
+_UNSAFE_SHELL_RE = re.compile(r"[;&|`$<>]")
+
+
+class _HostStdioMcpProc:
+    """Managed on-demand Windows STDIO JSON-RPC 2.0 MCP process with idle auto-shutdown."""
+
+    def __init__(self, server_id: str, exe_path: str, args: list[str], cwd: str | None, proc_env: dict[str, str]) -> None:
+        self.server_id = server_id
+        self.exe_path = exe_path
+        self.args = args
+        self.cwd = cwd or None
+        self.proc_env = proc_env
+        self.proc: subprocess.Popen[str] | None = None
+        self.lock = threading.Lock()
+        self.last_used = time.monotonic()
+        self._req_id = 0
+        self.initialized = False
+        self.protocol_version = "2024-11-05"
+
+    def is_alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self) -> None:
+        if self.is_alive():
+            return
+        self.proc = subprocess.Popen(
+            [self.exe_path, *self.args],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=self.cwd,
+            env=self.proc_env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+        )
+        self.initialized = False
+        self.last_used = time.monotonic()
+
+    def stop(self) -> None:
+        if self.proc is not None:
+            try:
+                if self.proc.poll() is None:
+                    self.proc.terminate()
+                    try:
+                        self.proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        self.proc.kill()
+            finally:
+                self.proc = None
+                self.initialized = False
+
+    def _send_and_recv(self, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+        assert self.proc is not None and self.proc.stdin is not None and self.proc.stdout is not None
+        self.proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        self.proc.stdin.flush()
+        result_box: list[str | None] = [None]
+        err_box: list[Exception | None] = [None]
+
+        def _reader() -> None:
+            try:
+                while True:
+                    raw = self.proc.stdout.readline()  # type: ignore[union-attr]
+                    if not raw:
+                        return
+                    s = raw.strip()
+                    if not s:
+                        continue
+                    try:
+                        parsed = json.loads(s)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(parsed, dict) and parsed.get("id") == payload.get("id"):
+                        result_box[0] = s
+                        return
+            except Exception as exc:
+                err_box[0] = exc
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive():
+            raise TimeoutError(f"Host STDIO MCP timeout after {timeout}s")
+        if err_box[0] is not None:
+            raise err_box[0]
+        if result_box[0] is None:
+            stderr_tail = ""
+            try:
+                if self.proc.stderr:
+                    stderr_tail = (self.proc.stderr.read() or "")[-300:]
+            except Exception:
+                pass
+            raise RuntimeError(f"Host STDIO MCP exited unexpectedly. {stderr_tail}".strip())
+        return json.loads(result_box[0])
+
+    def _notify(self, method: str) -> None:
+        assert self.proc is not None and self.proc.stdin is not None
+        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method}) + "\n")
+        self.proc.stdin.flush()
+
+    def ensure_initialized(self, timeout: float = 25.0) -> dict[str, Any]:
+        with self.lock:
+            self.start()
+            if self.initialized and self.is_alive():
+                self.last_used = time.monotonic()
+                return {"protocolVersion": self.protocol_version}
+            self._req_id += 1
+            resp = self._send_and_recv(
+                {
+                    "jsonrpc": "2.0",
+                    "id": self._req_id,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "ai-memory-hub-host-bridge", "version": "3.2.1"},
+                    },
+                },
+                timeout=timeout,
+            )
+            if "error" in resp:
+                raise RuntimeError(f"MCP initialize failed: {resp['error']}")
+            res = resp.get("result") or {}
+            self.protocol_version = str(res.get("protocolVersion") or "2024-11-05")
+            self._notify("notifications/initialized")
+            self.initialized = True
+            self.last_used = time.monotonic()
+            return res
+
+    def list_tools(self, timeout: float = 25.0) -> list[dict[str, Any]]:
+        self.ensure_initialized(timeout=timeout)
+        with self.lock:
+            tools: list[dict[str, Any]] = []
+            cursor: str | None = None
+            for _ in range(20):
+                self._req_id += 1
+                params: dict[str, Any] = {"cursor": cursor} if cursor else {}
+                resp = self._send_and_recv(
+                    {"jsonrpc": "2.0", "id": self._req_id, "method": "tools/list", "params": params},
+                    timeout=timeout,
+                )
+                if "error" in resp:
+                    raise RuntimeError(f"MCP tools/list failed: {resp['error']}")
+                res = resp.get("result") or {}
+                tools.extend(res.get("tools") or [])
+                cursor = res.get("nextCursor")
+                if not cursor:
+                    break
+            self.last_used = time.monotonic()
+            return tools
+
+    def call_tool(self, tool_name: str, arguments: dict[str, Any], timeout: float = 45.0) -> dict[str, Any]:
+        self.ensure_initialized(timeout=min(timeout, 25.0))
+        with self.lock:
+            self._req_id += 1
+            resp = self._send_and_recv(
+                {
+                    "jsonrpc": "2.0",
+                    "id": self._req_id,
+                    "method": "tools/call",
+                    "params": {"name": tool_name, "arguments": arguments},
+                },
+                timeout=timeout,
+            )
+            self.last_used = time.monotonic()
+            if "error" in resp:
+                raise RuntimeError(f"MCP tools/call error: {resp['error']}")
+            return resp.get("result") or {}
+
+
+_HOST_MCP_POOL: dict[str, _HostStdioMcpProc] = {}
+_HOST_MCP_LOCK = threading.Lock()
+
+
+def _resolve_windows_exe(executable: str) -> str | None:
+    base = Path(executable).stem.lower()
+    if base not in _ALLOWED_MCP_EXECUTABLES:
+        return None
+    if os.name == "nt" and base == "npx":
+        return shutil.which("npx.cmd") or shutil.which("npx")
+    return shutil.which(executable)
+
+
+def _reap_idle_host_mcps(idle_sec: int = 180) -> None:
+    now_m = time.monotonic()
+    with _HOST_MCP_LOCK:
+        idle = [sid for sid, p in _HOST_MCP_POOL.items() if now_m - p.last_used > idle_sec]
+        procs = [_HOST_MCP_POOL.pop(sid) for sid in idle]
+    for p in procs:
+        try:
+            p.stop()
+        except Exception:
+            pass
+
+
+def _handle_host_mcp_stdio(env: dict[str, str], action: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    server_id = str(body.get("server_id") or "").strip()
+    if not server_id:
+        return 400, {"error": {"code": "missing_server_id", "message": "server_id is required"}}
+
+    if action == "stop":
+        with _HOST_MCP_LOCK:
+            proc = _HOST_MCP_POOL.pop(server_id, None)
+        if proc:
+            proc.stop()
+        return 200, {"server_id": server_id, "process_status": "stopped"}
+
+    exe_raw = str(body.get("executable") or "").strip()
+    args = [str(a) for a in (body.get("args") or [])]
+    cwd = str(body.get("working_dir") or "").strip() or None
+    timeout = float(body.get("timeout_sec") or 25.0)
+    env_allow = [str(k) for k in (body.get("env_allowlist") or [])]
+    secret_refs = [str(k) for k in (body.get("secret_refs") or [])]
+
+    base_name = Path(exe_raw).stem.lower() if exe_raw else ""
+    if base_name not in _ALLOWED_MCP_EXECUTABLES:
+        return 403, {"error": {"code": "executable_not_allowed", "message": f"Executable '{exe_raw}' is not in Host Runner MCP allowlist."}}
+    if any(_UNSAFE_SHELL_RE.search(a) for a in args):
+        return 422, {"error": {"code": "unsafe_arguments", "message": "Shell metacharacters are forbidden in MCP arguments."}}
+
+    exe_path = _resolve_windows_exe(exe_raw)
+    if not exe_path:
+        return 404, {"error": {"code": "not_installed_on_host", "message": f"Executable '{exe_raw}' is not installed on Windows host PATH."}}
+
+    safe_keys = {"PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "COMSPEC", "PYTHONIOENCODING"}
+    allowed_keys = safe_keys | set(env_allow) | set(secret_refs)
+    proc_env = {k: v for k, v in os.environ.items() if k.upper() in {x.upper() for x in allowed_keys}}
+    for k in set(env_allow) | set(secret_refs):
+        if k in env and k not in proc_env:
+            proc_env[k] = env[k]
+
+    with _HOST_MCP_LOCK:
+        proc = _HOST_MCP_POOL.get(server_id)
+        if proc is None or not proc.is_alive() or proc.exe_path != exe_path or proc.args != args:
+            if proc is not None:
+                proc.stop()
+            proc = _HostStdioMcpProc(server_id, exe_path, args, cwd, proc_env)
+            _HOST_MCP_POOL[server_id] = proc
+
+    try:
+        if action == "health":
+            proc.ensure_initialized(timeout=min(timeout, 30.0))
+            return 200, {
+                "server_id": server_id,
+                "health_status": "ready",
+                "protocol_version": proc.protocol_version,
+                "process_pid": proc.proc.pid if proc.proc else None,
+                "process_status": "running",
+                "resolved_executable": exe_path,
+                "host_bridge": True,
+            }
+        if action == "discover":
+            tools = proc.list_tools(timeout=min(timeout, 35.0))
+            return 200, {
+                "server_id": server_id,
+                "protocol_version": proc.protocol_version,
+                "tools": tools,
+                "host_bridge": True,
+            }
+        if action == "invoke":
+            tool_name = str(body.get("tool_name") or "").strip()
+            arguments = dict(body.get("arguments") or {})
+            if not tool_name:
+                return 400, {"error": {"code": "missing_tool_name", "message": "tool_name is required"}}
+            res = proc.call_tool(tool_name, arguments, timeout=min(timeout, 60.0))
+            return 200, {"server_id": server_id, "tool_name": tool_name, "result": res, "host_bridge": True}
+    except TimeoutError as exc:
+        proc.stop()
+        return 504, {"error": {"code": "timeout", "message": str(exc)}}
+    except Exception as exc:
+        proc.stop()
+        return 502, {"error": {"code": "host_mcp_error", "message": str(exc)[:400]}}
+    return 400, {"error": {"code": "unknown_action", "message": action}}
+
+
 def _periodic_sync_loop(env: dict[str, str], interval_sec: int, stop_ev: threading.Event) -> None:
     # Run initial sync shortly after boot, then periodically
     stop_ev.wait(2.0)
+    last_sync = 0.0
+    idle_sec = max(60, int(env.get("HOST_MCP_IDLE_SEC", "180")))
     while not stop_ev.is_set():
-        try:
-            sync_catalog_to_bridge(env)
-        except Exception:
-            pass
-        stop_ev.wait(interval_sec)
+        now_m = time.monotonic()
+        if now_m - last_sync >= interval_sec:
+            try:
+                sync_catalog_to_bridge(env)
+            except Exception:
+                pass
+            last_sync = now_m
+        _reap_idle_host_mcps(idle_sec=idle_sec)
+        stop_ev.wait(30.0)
 
 
 def main() -> None:
