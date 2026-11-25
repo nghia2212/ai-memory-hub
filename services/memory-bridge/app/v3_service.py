@@ -112,14 +112,12 @@ class V3BridgeService:
                     INSERT INTO v3_mcp_servers (
                         id, name, transport, endpoint_or_cmd, version, trust_tier, approval_state,
                         allowed_project_ids_json, health_status, last_checked_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'builtin', 'approved', '[]', 'ready', ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, 'builtin', 'approved', '[]', 'unknown', NULL, ?, ?)
                     ON CONFLICT(name) DO UPDATE SET
                         version = excluded.version,
-                        health_status = 'ready',
-                        last_checked_at = excluded.last_checked_at,
                         updated_at = excluded.updated_at
                     """,
-                    (sid, name, transport, endpoint, ver, now, now, now),
+                    (sid, name, transport, endpoint, ver, now, now),
                 )
                 row = conn.execute("SELECT id FROM v3_mcp_servers WHERE name = ?", (name,)).fetchone()
                 actual_sid = row["id"]
