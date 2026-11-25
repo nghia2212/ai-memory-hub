@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from .cbm_client import CBMBackend, CBMClientError
 from .config import Settings
-from .explorer import directory_page, safe_entry, source_page
+from .explorer import directory_page, safe_entry, source_page, trace_edges
 from .models import (
     IndexJobResponse,
     IndexRequest,
@@ -165,16 +165,22 @@ class CodebaseService:
         elif view == "source":
             data = await asyncio.to_thread(source_page, root, path, entry.exclude, line)
         elif view == "outline":
+            if not snapshot:
+                raise HTTPException(409, "Worktree has no index")
             safe_entry(root, path, entry.exclude)
             data = await self._cbm.call_tool("get_file_outline", {"project": project, "file_path": path,
                                              "limit": 60, "offset": offset, "format": "json"}, timeout=12)
         else:
+            if not snapshot:
+                raise HTTPException(409, "Worktree has no index")
             if not symbol.strip():
                 raise HTTPException(422, "Symbol required")
             data = await self._cbm.call_tool("trace_path", {"project": project, "function_name": symbol,
                 "depth": depth, "direction": "both", "format": "json", "limit": 30,
                 "max_output_tokens": 2600, "include_tests": True, "include_evidence": True}, timeout=12)
-        return {**info, **data}
+        if view == "graph":
+            return {**data, **info, "graph_edges": trace_edges(data, root, entry.exclude), "graph_source": "cbm trace_path"}
+        return {**data, **info}
 
     def _row_to_job_response(self, row: dict[str, Any], *, deduplicated: bool = False) -> IndexJobResponse:
         return IndexJobResponse(

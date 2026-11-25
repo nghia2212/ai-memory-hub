@@ -61,3 +61,52 @@ def source_page(root, path, excludes, line):
     return {"path": path, "line": line, "total_lines": len(lines), "bytes": len(raw),
             "lines": [s[:600] for s in lines[line - 1:line + 79]]}
 
+
+
+def trace_edges(payload, root, excludes):
+    """Normalize explicit caller/callee or source/target records only.
+    Unknown upstream shapes remain available as evidence, never invented edges.
+    """
+    edges = []
+    seen = set()
+    def endpoint(value):
+        if isinstance(value, str):
+            return {"name": value[:240]}
+        if not isinstance(value, dict):
+            return None
+        name = value.get("qualified_name") or value.get("name") or value.get("id")
+        if not isinstance(name, str) or not name:
+            return None
+        result = {"name": name[:240]}
+        path = value.get("file_path") or value.get("path") or value.get("file")
+        if isinstance(path, str):
+            try:
+                file = safe_entry(root, path, excludes)
+                if file.is_file():
+                    result["path"] = file.relative_to(root.resolve()).as_posix()
+            except (HTTPException, OSError, ValueError):
+                pass
+        line = value.get("line") or value.get("line_start")
+        if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+            result["line"] = line
+        return result
+    def visit(value, depth=0):
+        if depth > 6 or len(edges) >= 60:
+            return
+        if isinstance(value, list):
+            for child in value[:100]:
+                visit(child, depth + 1)
+        elif isinstance(value, dict):
+            pair = next(((value[a], value[b]) for a,b in (("caller","callee"),("source","target"),("from","to")) if a in value and b in value), None)
+            if pair:
+                left, right = map(endpoint, pair)
+                if left and right:
+                    key = (tuple(left.items()), tuple(right.items()))
+                    if key not in seen:
+                        seen.add(key)
+                        edges.append({"source": left, "target": right, "relation": str(value.get("relation") or value.get("type") or "upstream edge")[:80]})
+            for child in list(value.values())[:100]:
+                if isinstance(child, (list, dict)):
+                    visit(child, depth + 1)
+    visit(payload)
+    return edges

@@ -33,3 +33,6 @@ Docker stats (một mẫu, không phải peak): Bridge 76.79 MiB / 0.12% CPU, Da
 
 ### Checkpoint Workbench UI
 Restored missing workbench.js/css referenced by Codex; added real scoped tree/source/outline/trace evidence, history/detail, agent session monitor, V2 usage table, responsive sidebar, dependency list, unified lease expiration. Trace is evidence table, not full interactive graph. Read-only host dispatch remains limited; attachments, safe write execution, external telemetry, self-onboarding and real Windows QA remain open. No tests executed in GitHub connector session.
+
+### P1.2 checkpoint
+Added explicit upstream-edge visualization, source navigation for fresh index evidence, separate same-project worktree index/source comparisons and stale-response guards. Unknown graph formats remain evidence-only. Real CBM v0.12.1 trace payload and browser QA NOT RUN; no merge or deployment.

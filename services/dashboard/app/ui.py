@@ -230,6 +230,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <p id="tree-path"></p><div id="tree-files"></div></aside><article class="card"><h3 id="source-title">Mã nguồn</h3>
       <div id="index-meta"></div><div id="source-actions" class="row-actions"></div><pre id="source-text"></pre>
       <div id="symbol-list"></div><label>Symbol cần trace</label><input id="graph-symbol" maxlength="512"><label>Độ sâu</label><select id="graph-depth"><option>1</option><option>2</option><option>3</option></select><button id="graph-run" class="secondary">Trace / Impact</button><div id="call-graph"></div></article></div>
+      <div class="card"><h3>So sánh worktree cùng dự án</h3><label>Worktree đối chiếu</label><select id="compare-wt"></select><button id="compare-run" class="secondary">So sánh index / file đang mở</button><div id="compare-result"></div></div>
     </section>
 
     <!-- 4. Duyệt bộ nhớ -->
