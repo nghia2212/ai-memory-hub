@@ -147,3 +147,19 @@ def test_v2_dashboard_ui_and_proxy_flows(v2_dash_client: TestClient):
     assert v2_dash_client.get(f"/api/v2/analytics/calibration?project_id={pid}").status_code == 200
     assert v2_dash_client.get("/api/v2/catalog").status_code == 200
     assert v2_dash_client.get("/api/v2/quotas").status_code == 200
+
+
+def test_execution_map_auth_and_empty_scope(v2_dash_client):
+    html=v2_dash_client.get("/").text
+    for label in ("Bản đồ thực thi","Graph View","Swimlane View","Timeline View","Table View"):
+        assert label in html
+    js=v2_dash_client.get("/execution-map.js")
+    assert js.status_code==200 and "renderMetrics" in js.text
+    assert v2_dash_client.get("/api/v2/traces").status_code==401
+    login=v2_dash_client.post("/api/auth/login",headers={"Origin":"http://testserver"},json={"password":"v2-dash-password"})
+    assert login.status_code==200
+    p=v2_dash_client.post("/api/projects",headers={"Origin":"http://testserver","X-CSRF-Token":login.json()["csrf_token"]},json={"name":"trace-ui","canonical_identity":"git:trace-ui"})
+    assert p.status_code==201
+    r=v2_dash_client.get("/api/v2/traces",params={"project_id":p.json()["project_id"],"sort":"duration_desc"})
+    assert r.status_code==200,r.text
+    assert r.json()["items"]==[] and r.json()["metrics"]["input_tokens"] is None
