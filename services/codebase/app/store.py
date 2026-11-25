@@ -69,6 +69,15 @@ class AdapterStore:
                 ON index_jobs (project_id, worktree_id, state)
                 """
             )
+            # Reconcile orphaned jobs interrupted by a container restart
+            conn.execute(
+                """
+                UPDATE index_jobs
+                SET state = 'failed', error = 'interrupted_by_restart', updated_at = ?
+                WHERE state IN ('queued', 'running')
+                """,
+                (utc_now_iso(),),
+            )
         self._conn = conn
 
     def close(self) -> None:
