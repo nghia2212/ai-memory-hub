@@ -137,6 +137,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script defer src="/v31-ui.js"></script>
   <script defer src="/v32-ui.js"></script>
   <script defer src="/v321-api-agent-ui.js"></script>
+  <script defer src="/v321-chat-ui.js"></script>
 </head>
 <body>
   <header>
@@ -154,6 +155,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <nav id="navigation" aria-label="Điều hướng">
     <button onclick="showTab('overview', this)" class="active">Tổng quan</button>
+    <button id="chat-nav" onclick="showTab('chat', this)">Trò chuyện AI</button>
     <button onclick="showTab('plans', this)" >Giao công việc</button>
     <button onclick="showTab('agents', this)" >Agent Control Center</button>
     <button id="trace-nav" onclick="showTab('traces', this)">Bản đồ thực thi</button>
@@ -833,6 +835,59 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card" style="margin-top:16px">
         <h3>Lịch sử Hub-managed API Agent Runs &amp; Token / Budget (P16–P19)</h3>
         <div id="runs-list">Chưa có phiên API Agent nào.</div>
+      </div>
+    </section>
+
+    <!-- P19A: AI Chat Workspace (Chat / Task / Plan & DAG) -->
+    <section id="tab-chat" class="panel">
+      <div class="card" style="margin-bottom:12px">
+        <div class="row-actions" style="justify-content:space-between">
+          <h2 style="margin:0">AI Chat Workspace (Chat · Task · Plan &amp; DAG)</h2>
+          <div class="row-actions">
+            <select id="chat-proj-sel" style="width:200px"></select>
+            <select id="chat-biz-sel" style="width:180px"></select>
+            <select id="chat-prov-sel" style="width:220px"></select>
+            <button id="chat-new-btn" type="button" class="primary" style="margin-top:0">+ Cuộc trò chuyện mới</button>
+          </div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:start">
+        <aside class="card">
+          <input id="chat-search-inp" placeholder="Tìm cuộc trò chuyện..." style="margin-bottom:8px" />
+          <div id="chat-conv-list">Đăng nhập để tải danh sách hội thoại.</div>
+        </aside>
+        <div class="card">
+          <div class="row-actions" style="justify-content:space-between;margin-bottom:8px">
+            <strong id="chat-conv-title">Chọn hoặc tạo cuộc trò chuyện mới</strong>
+            <div class="row-actions">
+              <select id="chat-mode-sel" style="width:160px">
+                <option value="chat">Chế độ: Chat (Hỏi đáp trực tiếp)</option>
+                <option value="task">Chế độ: Task (1 việc có Tool/Handoff)</option>
+                <option value="plan_dag">Chế độ: Plan &amp; DAG (Nhiều bước)</option>
+              </select>
+              <select id="chat-think-sel" style="width:110px">
+                <option value="none">Think: none</option>
+                <option value="low">Think: low</option>
+                <option value="medium">Think: medium</option>
+                <option value="high">Think: high</option>
+              </select>
+              <button id="chat-export-btn" type="button" class="secondary">Export JSON</button>
+            </div>
+          </div>
+          <div id="chat-messages" style="min-height:280px;max-height:460px;overflow-y:auto;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-bottom:10px">
+            <p class="trace-muted">Chế độ Chat trả lời trực tiếp, không bắt buộc lập/duyệt DAG. Mặc định chỉ đọc (read-only).</p>
+          </div>
+          <div class="row-actions" style="margin-bottom:6px">
+            <label style="margin:0"><input id="chat-allow-tools" type="checkbox" style="width:auto" /> Cho phép dùng MCP Tools đã duyệt</label>
+            <label style="margin:0"><input id="chat-consent-chk" type="checkbox" style="width:auto" /> Đồng ý gửi API trả phí (nếu chọn provider trả phí)</label>
+            <label style="margin:0;display:flex;align-items:center;gap:4px">Ngân sách tối đa ($):<input id="chat-budget-inp" type="number" step="0.01" min="0" value="0.05" style="width:80px" /></label>
+          </div>
+          <textarea id="chat-input" rows="3" placeholder="Nhập câu hỏi (ví dụ: Xin chào, bạn là ai? · Hãy giới thiệu về bạn · Giải thích đoạn mã...)"></textarea>
+          <div class="row-actions" style="justify-content:flex-end;margin-top:6px">
+            <span id="chat-send-state" class="trace-muted"></span>
+            <button id="chat-send-btn" type="button" class="primary" style="margin-top:0">Gửi tin nhắn</button>
+          </div>
+        </div>
       </div>
     </section>
   </main>

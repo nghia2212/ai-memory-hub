@@ -150,7 +150,7 @@ class JobCompleteRequest(StrictV2Model):
     duration_ms: int | None = Field(default=None, ge=0)
     actual_changed_files: int | None = Field(default=None, ge=0)
     peak_context_tokens: int | None = Field(default=None, ge=0)
-    handoff_summary: str | None = Field(default=None, max_length=4000)
+    handoff_summary: str | None = Field(default=None, max_length=16000)
     error_code: str | None = Field(default=None, max_length=64)
     error_summary: str | None = Field(default=None, max_length=1000)
 

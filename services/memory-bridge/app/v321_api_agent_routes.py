@@ -11,6 +11,8 @@ from .v321_agent_engine import V321AgentExecutionEngine
 from .v321_api_agent_schema import (
     AgentRunCreateRequest,
     AgentRunPreviewRequest,
+    ChatConversationCreateRequest,
+    ChatMessageSendRequest,
     HybridPlanCreateRequest,
     HybridStageUpdateRequest,
     ProjectEgressPolicyRequest,
@@ -18,6 +20,7 @@ from .v321_api_agent_schema import (
     ProviderProfilePatchRequest,
     ProviderProfileUpsertRequest,
 )
+from .v321_chat_service import V321ChatService
 from .v321_provider_service import V321ProviderService
 
 
@@ -25,6 +28,8 @@ def create_v321_api_agent_router(
     prov_svc: V321ProviderService,
     engine: V321AgentExecutionEngine,
     cfg: Settings,
+    *,
+    chat_svc: V321ChatService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/v321", tags=["v3.2.1 p14-p19 ai providers & api agent"])
 
@@ -102,5 +107,36 @@ def create_v321_api_agent_router(
     @router.patch("/hybrid-stages/{stage_id}")
     def update_hybrid_stage(stage_id: str, req: HybridStageUpdateRequest, p: Principal = Depends(admin)):
         return engine.update_hybrid_stage(stage_id, req)
+
+    # --- P19A: AI Chat Workspace (Chat / Task / Plan & DAG) ---
+    if chat_svc is not None:
+        @router.get("/chat/conversations")
+        def list_chat_conversations(
+            project_id: UUID,
+            search: str = Query("", max_length=120),
+            include_archived: bool = Query(False),
+            p: Principal = Depends(reader),
+        ):
+            return chat_svc.list_conversations(str(project_id), search=search, include_archived=include_archived)
+
+        @router.post("/chat/conversations", status_code=201)
+        def create_chat_conversation(req: ChatConversationCreateRequest, p: Principal = Depends(admin)):
+            return chat_svc.create_conversation(req)
+
+        @router.get("/chat/conversations/{conversation_id}")
+        def get_chat_conversation(conversation_id: str, project_id: UUID, p: Principal = Depends(reader)):
+            return chat_svc.get_conversation(conversation_id, str(project_id))
+
+        @router.post("/chat/conversations/{conversation_id}/messages", status_code=201)
+        def send_chat_message(conversation_id: str, req: ChatMessageSendRequest, p: Principal = Depends(admin)):
+            return chat_svc.send_message(conversation_id, req, actor=p.role)
+
+        @router.get("/chat/conversations/{conversation_id}/export")
+        def export_chat_conversation(conversation_id: str, project_id: UUID, p: Principal = Depends(reader)):
+            return chat_svc.export_conversation(conversation_id, str(project_id))
+
+        @router.delete("/chat/conversations/{conversation_id}")
+        def archive_chat_conversation(conversation_id: str, project_id: UUID, p: Principal = Depends(admin)):
+            return chat_svc.archive_conversation(conversation_id, str(project_id))
 
     return router

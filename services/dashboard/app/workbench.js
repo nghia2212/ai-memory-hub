@@ -29,7 +29,31 @@
   if(!["COMPLETED","CANCELLED","REJECTED","FAILED"].includes(d.status))actions.append(button("Hủy kế hoạch",async()=>{if(confirm("Hủy kế hoạch? Kiểm tra tiến trình CLI trước khi giao lại công việc."))await planAction(id,"cancel");}));
   if(tasks.some(t=>t.state==="blocked"))target.append(el("p","Kết quả chưa xác định. Kiểm tra worktree và tiến trình trước khi tạo kế hoạch thay thế.","badge warn"));
   const forecast=el("div");target.append(forecast);fields(forecast,[["Revision",rev?.revision_hash],["Độ tin cậy dự báo",d.forecast?.confidence],["Số task",tasks.length]]);
-  const meta=$("task-meta");meta.replaceChildren();for(const a of d.attempts||[]){const box=el("div",null,"attempt");box.append(el("strong",a.status+" · "+fmt(a.runner_id)),el("p","Heartbeat: "+fmt(a.heartbeat_at)),el("p","Lỗi: "+fmt(a.error_code)),el("pre",a.handoff_summary||a.error_summary||"Chưa có kết quả"));meta.append(box);}if(!meta.childNodes.length)meta.textContent="Chưa có phiên thực thi.";
+  // P16A: Prominent AI Result Delivery Card right in task-detail (persists across refresh/restart)
+  const attempts=d.attempts||[];
+  const latestWithResult=attempts.find(a=>a.handoff_summary&&a.handoff_summary!=="No structured result available.")||attempts[0];
+  if(latestWithResult){
+    const rawAns=latestWithResult.handoff_summary||"";
+    const isPlaceholder=!rawAns||rawAns==="No structured result available.";
+    const delivStatus=isPlaceholder?(latestWithResult.status==="failed"?"failed":"missing"):"delivered";
+    const delivLabel=delivStatus==="delivered"?"Đã nhận kết quả (Delivered)":delivStatus==="missing"?"Thiếu câu trả lời (Historical / Missing)":"Thực thi lỗi (Failed)";
+    const delivCls=delivStatus==="delivered"?"badge ok":delivStatus==="missing"?"badge warn":"badge err";
+    const rCard=el("div",null,"card");rCard.style.marginTop="12px";
+    const rHead=el("div",null,"row-actions");
+    rHead.append(el("strong","Kết quả trả về từ AI"),el("span",delivLabel,delivCls));
+    if(!isPlaceholder){
+      rHead.append(button("Sao chép câu trả lời",()=>{navigator.clipboard?.writeText(rawAns);toast("Đã sao chép câu trả lời.");}));
+    }
+    rCard.append(rHead);
+    if(!isPlaceholder){
+      const pre=el("pre",rawAns);pre.style.whiteSpace="pre-wrap";pre.style.maxHeight="420px";pre.style.overflowY="auto";
+      rCard.append(pre);
+    }else{
+      rCard.append(el("p",latestWithResult.error_summary||"Không có nội dung câu trả lời hợp lệ (bản ghi lịch sử trước khi vá P16A hoặc runner không xuất kết quả).","trace-muted"));
+    }
+    target.append(rCard);
+  }
+  const meta=$("task-meta");meta.replaceChildren();for(const a of attempts){const box=el("div",null,"attempt");box.append(el("strong",a.status+" · "+fmt(a.runner_id)),el("p","Heartbeat: "+fmt(a.heartbeat_at)),el("p","Lỗi: "+fmt(a.error_code)),el("pre",a.handoff_summary||a.error_summary||"Chưa có kết quả"));meta.append(box);}if(!meta.childNodes.length)meta.textContent="Chưa có phiên thực thi.";
   }
   async function editRevision(d,rev,target){
     if(revisionEditing)return;

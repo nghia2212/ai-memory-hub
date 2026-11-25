@@ -246,6 +246,10 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     def v321_api_agent_ui_js():
         return Response(Path(__file__).with_name("v321-api-agent-ui.js").read_bytes(), media_type="application/javascript")
 
+    @app.get("/v321-chat-ui.js")
+    def v321_chat_ui_js():
+        return Response(Path(__file__).with_name("v321-chat-ui.js").read_bytes(), media_type="application/javascript")
+
     @app.get("/api/v2/traces/scope-options")
     async def api_traces_scope_options(request: Request):
         _require_session(request)
@@ -1367,6 +1371,38 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v321_patch_hybrid_stage(stage_id: str, request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("PATCH", f"/v321/hybrid-stages/{stage_id}", use_admin=True, json_body=await request.json())
+
+    # --- V3.2.1 P19A AI Chat Workspace Proxy Routes (all auth/CSRF enforced) ---
+    @app.get("/api/v321/chat/conversations")
+    async def api_v321_chat_list(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "search", "include_archived"}
+        return await _proxy_bridge("GET", "/v321/chat/conversations", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v321/chat/conversations")
+    async def api_v321_chat_create(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/chat/conversations", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v321/chat/conversations/{conversation_id}")
+    async def api_v321_chat_get(conversation_id: str, project_id: UUID, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v321/chat/conversations/{conversation_id}", params={"project_id": str(project_id)})
+
+    @app.post("/api/v321/chat/conversations/{conversation_id}/messages")
+    async def api_v321_chat_send(conversation_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v321/chat/conversations/{conversation_id}/messages", use_admin=True, json_body=await request.json(), timeout=60.0)
+
+    @app.get("/api/v321/chat/conversations/{conversation_id}/export")
+    async def api_v321_chat_export(conversation_id: str, project_id: UUID, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v321/chat/conversations/{conversation_id}/export", params={"project_id": str(project_id)})
+
+    @app.delete("/api/v321/chat/conversations/{conversation_id}")
+    async def api_v321_chat_archive(conversation_id: str, project_id: UUID, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("DELETE", f"/v321/chat/conversations/{conversation_id}", use_admin=True, params={"project_id": str(project_id)})
 
     return app
 

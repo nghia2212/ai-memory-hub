@@ -219,3 +219,71 @@ class HybridStageUpdateRequest(StrictApiAgentModel):
     linked_run_id: str | None = None
     linked_session_id: str | None = None
     handoff_summary: str | None = Field(default=None, max_length=4000)
+
+
+# Migration 13 (strictly additive): P19A AI Chat Workspace durable conversations & messages
+V321_CHAT_WORKSPACE_SQL = """
+CREATE TABLE IF NOT EXISTS mcp321_chat_conversations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    worktree_id TEXT REFERENCES worktrees(id) ON DELETE SET NULL,
+    business_id TEXT NOT NULL REFERENCES v31_business_profiles(id),
+    title TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat', 'task', 'plan_dag')),
+    provider_profile_id TEXT REFERENCES mcp321_provider_profiles(id),
+    model_id TEXT NOT NULL DEFAULT '',
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mcp321_chat_conv_proj ON mcp321_chat_conversations(project_id, archived, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS mcp321_chat_messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES mcp321_chat_conversations(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+    content TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT 'text/markdown' CHECK(content_type IN ('text/plain', 'text/markdown', 'application/json')),
+    delivery_status TEXT NOT NULL DEFAULT 'delivered' CHECK(delivery_status IN ('pending', 'delivered', 'missing', 'failed', 'not_applicable')),
+    mode TEXT NOT NULL DEFAULT 'chat',
+    provider_key TEXT,
+    model_id TEXT,
+    thinking_level TEXT,
+    run_id TEXT,
+    plan_id TEXT,
+    trace_id TEXT,
+    idempotency_key TEXT,
+    usage_json TEXT NOT NULL DEFAULT '{}',
+    sources_json TEXT NOT NULL DEFAULT '{}',
+    truncated INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(conversation_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_mcp321_chat_msg_conv ON mcp321_chat_messages(conversation_id, created_at ASC);
+"""
+
+
+class ChatConversationCreateRequest(StrictApiAgentModel):
+    project_id: UUID
+    worktree_id: UUID | None = None
+    business_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(default="Cuộc trò chuyện mới", min_length=1, max_length=200)
+    mode: Literal["chat", "task", "plan_dag"] = "chat"
+    provider_profile_id: str | None = Field(default=None, max_length=80)
+    model_id: str | None = Field(default=None, max_length=120)
+
+
+class ChatMessageSendRequest(StrictApiAgentModel):
+    project_id: UUID
+    content: str = Field(min_length=1, max_length=16000)
+    mode: Literal["chat", "task", "plan_dag"] | None = None
+    provider_profile_id: str | None = Field(default=None, max_length=80)
+    model_id: str | None = Field(default=None, max_length=120)
+    thinking_level: Literal["none", "low", "medium", "high", "max"] = "none"
+    max_budget_usd: float = Field(default=0.05, ge=0.0, le=50.0)
+    allow_tools: bool = False
+    egress_consent_confirmed: bool = False
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    mock_script: list[dict[str, Any]] | None = None
+

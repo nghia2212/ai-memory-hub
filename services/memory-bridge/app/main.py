@@ -47,6 +47,7 @@ from .v321_service import V321Mcp321Service
 from .v321_provider_gateway import AIProviderGateway
 from .v321_provider_service import V321ProviderService
 from .v321_agent_engine import V321AgentExecutionEngine
+from .v321_chat_service import V321ChatService
 from .v321_api_agent_routes import create_v321_api_agent_router
 from .trace_operations import trace_parent, trace_transport
 from .v2_service import V2BridgeService
@@ -372,9 +373,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     prov_gw = AIProviderGateway()
     prov_svc = V321ProviderService(db, prov_gw)
     agent_eng = V321AgentExecutionEngine(db, service, v31_gw, v32_skills, prov_svc, prov_gw)
+    chat_svc = V321ChatService(db, v2_service, prov_svc, prov_gw, agent_eng)
     app.state.v321_provider_service = prov_svc
     app.state.v321_agent_engine = agent_eng
-    app.include_router(create_v321_api_agent_router(prov_svc, agent_eng, cfg))
+    app.state.v321_chat_service = chat_svc
+    app.include_router(create_v321_api_agent_router(prov_svc, agent_eng, cfg, chat_svc=chat_svc))
 
     # Mount FastMCP Streamable HTTP app at /mcp
     app.mount("/mcp", mcp_app)

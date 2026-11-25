@@ -4,7 +4,7 @@ Cập nhật: 2026-11-25
 Nhánh triển khai: `lead/mcp321-integration`  
 Nhánh nền V3.2: `lead/sk32-integration` (`0c25943`)  
 Kế hoạch nguồn: `docs/future/V321-MCP321.md` + `docs/mcp321/P9-P13-TELEMETRY-ADDENDUM.md` + `docs/mcp321/P14-P20-API-AGENT-ADDENDUM.md`  
-Schema SQLite: **v12** (strictly additive `v9 → v10 → v11 → v12`, bảo toàn toàn bộ dữ liệu V1–V3.2)
+Schema SQLite: **v13** (strictly additive `v9 → v10 → v11 → v12 → v13`, bảo toàn toàn bộ dữ liệu V1–V3.2)
 
 | Milestone | Phạm vi | Trạng thái | Bằng chứng & Ghi chú |
 |---|---|---|---|
@@ -24,4 +24,6 @@ Schema SQLite: **v12** (strictly additive `v9 → v10 → v11 → v12`, bảo to
 | **P17** | Tích hợp AI Memory, MCP và Skill vào API Agent | **DONE** | `preview_run()` + `_execute_loop()` dùng chung `MemoryBridgeService`, `V32SkillService` và `V31McpGatewayService` (0 LLM cho context resolution); mọi tool call đi qua Gateway default-deny & project overrides, ghi trace đầy đủ vào Execution Map. |
 | **P18** | Token, Thinking & Atomic Budget Controller | **DONE** | `atomic_reserve_request()` + `reconcile_request()`: kiểm tra egress + giá + ngân sách trong SQLite `write_tx`, đặt trước atomic, idempotency chống cộng trùng retry, giữ `uncertain_budget_usd` khi lỗi mạng, không cộng trùng `reasoning_tokens` vào `known_token_subtotal`. |
 | **P19** | Dashboard AI Providers, API Agent & Hybrid Mode | **DONE** | Tab **AI Providers & API Agent** (`v321-api-agent-ui.js`), `mcp321_hybrid_stages` hỗ trợ Hybrid Plan (API Agent + External Antigravity `awaiting_external` trung thực + Local Compute), tích hợp trực tiếp vào Execution Map hiện có. |
-| **P20** | Integration, Security, Playwright QA & Windows Delivery | **DONE (Mock/Isolated) / BLOCKED (Live Paid API)** | `test_v321_p14_p20_api_agent.py` + `Test-MCP321.ps1` + Playwright 1366×768 & 1920×1080 PASS. Live paid API smoke test ghi nhận **BLOCKED** (chưa bật key/phê duyệt chi phí trên live). |
+| **P16A** | Agent Result Delivery (sửa lỗi `No structured result available.`) | **DONE** | Root cause: `host_brain_agent.py` import `cli_runner.py` (phụ thuộc `pydantic`, không có trên Windows host Python) nên exception bị nuốt và trả `"No structured result available."`. Đã thay bằng `services/orchestrator/result_parser.py` (100% stdlib, hỗ trợ Text/Markdown/JSON/JSONL, lọc secret & `<think>`), tăng `handoff_summary` lên 16.000 ký tự, không đánh dấu `succeeded` nếu thiếu `final_answer`, hiển thị Thẻ Kết quả AI nổi bật + nút Copy ngay trên `workbench.js`. |
+| **P19A** | AI Chat Workspace (Chat / Task / Plan & DAG) | **DONE** | Migration v13 (`mcp321_chat_conversations`, `mcp321_chat_messages`), `v321_chat_service.py`, tab **Trò chuyện AI** (`v321-chat-ui.js`): Chat Mode không bắt buộc tạo/duyệt DAG, hỗ trợ follow-up bền vững, Task Mode, Plan & DAG Mode, XSS-safe DOM rendering, Copy, Export JSON, Budget & Egress gates, tích hợp Memory/MCP/Skill & Execution Map. |
+| **P20** | Integration, Security, Playwright QA & Windows Delivery | **DONE (Mock/Isolated) / BLOCKED (Live Paid API)** | `test_v321_p14_p20_api_agent.py` + `test_v321_p16a_p19a_result_delivery_and_chat.py` + `Test-MCP321.ps1` + Playwright 1366×768 & 1920×1080 PASS. Live paid API smoke test ghi nhận **BLOCKED** (chưa bật key/phê duyệt chi phí trên live). |

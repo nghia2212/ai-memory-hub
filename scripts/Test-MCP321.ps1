@@ -62,18 +62,19 @@ try {
         Record-Gate 'Upgrade' 'SKIP' 'Default read-only mode (pass -Upgrade to backup & rebuild)'
     }
 
-    Write-Step '3/9 Checking Health & Schema V12...'
+    Write-Step '3/9 Checking Health & Schema V13...'
     $bh = Wait-Health "$bridge/healthz" $HealthTimeoutSec
     $null = Wait-Health "$codebase/healthz" $HealthTimeoutSec
     $null = Wait-Health "$dash/healthz" $HealthTimeoutSec
-    Record-Gate 'Health & Schema' $(if ([int]$bh.schema_version -ge 12) { 'PASS' } else { 'FAIL' }) "Bridge schema=$($bh.schema_version), Codebase=ready, Dashboard=ready"
+    Record-Gate 'Health & Schema' $(if ([int]$bh.schema_version -ge 13) { 'PASS' } else { 'FAIL' }) "Bridge schema=$($bh.schema_version), Codebase=ready, Dashboard=ready"
 
-    Write-Step '4/9 Checking Dashboard Auth 401 on MCP321 P1-P20 endpoints...'
+    Write-Step '4/9 Checking Dashboard Auth 401 on MCP321 P1-P20 + P19A Chat endpoints...'
     foreach ($ep in @(
         '/api/v321/catalog',
         '/api/v321/runtime-adapters',
         '/api/v321/providers',
         '/api/v321/agent-runs',
+        '/api/v321/chat/conversations?project_id=20ef268d-5a07-43a7-a66f-8a83e87dd0f7',
         '/api/v321/external-plans?project_id=20ef268d-5a07-43a7-a66f-8a83e87dd0f7',
         '/api/v321/projects/20ef268d-5a07-43a7-a66f-8a83e87dd0f7/mcp-overrides?business_id=test'
     )) {
@@ -130,7 +131,8 @@ try {
             'tests/v32/test_v32_p6a_task_centric_execution_map.py',
             'tests/v321/test_v321_mcp_catalog_and_external_plans.py',
             'tests/v321/test_v321_business_bindings_and_telemetry.py',
-            'tests/v321/test_v321_p14_p20_api_agent.py'
+            'tests/v321/test_v321_p14_p20_api_agent.py',
+            'tests/v321/test_v321_p16a_p19a_result_delivery_and_chat.py'
         )
         $suitesStr = $suites -join ' '
         $cmd = "apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null && python -m venv /tmp/mcp321test && /tmp/mcp321test/bin/pip install -q -r /repo/services/memory-bridge/requirements.txt -r /repo/services/dashboard/requirements.txt pytest && cd /repo && PYTHONPATH=/repo /tmp/mcp321test/bin/python -m pytest -p no:cacheprovider -q --maxfail=1 $suitesStr"

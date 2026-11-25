@@ -565,26 +565,43 @@ def execute_approved_plan(
         return {"ok": False, "job_id": job_id, "session_id": session_id, "message": "Heartbeat lost; outcome unknown. Inspect before retry."}
     duration_ms = int((time.perf_counter() - t0) * 1000)
     quota_error = re.search(r"(?i)(?:quota exceeded|rate.limit exceeded|resource.exhausted|quota will reset)", (err or out)[:2000])
-    succeeded = rc == 0 and bool(out) and not quota_error
-    # Use the same parser as the polling runner. A telemetry failure must
-    # not trigger another CLI invocation or prevent lease completion.
+    # P16A: Use zero-dependency result_parser (never fails with missing pydantic on host Python!).
+    from services.orchestrator.result_parser import parse_agent_stdout
+
+    parsed = parse_agent_stdout(cli_family=str(provider), stdout=out, stderr=err, exit_code=rc)
+    delivery_status = parsed["result_delivery_status"]
+    final_answer = parsed["final_answer"]
+    content_type = parsed["content_type"]
     usage_status = None
-    summary = "No structured result available."
-    try:
-        from services.orchestrator.dispatch.cli_runner import parse_cli_telemetry, redact_summary
-        counters, _, summary = parse_cli_telemetry(cli_family=str(provider), stdout=out)
-        if not summary:
-            summary = redact_summary(err or "No output")
-        if session_id:
+    if session_id:
+        try:
             usage_status, _ = _bridge_request(
                 env, "POST", "/v2/usage", token_key="BRIDGE_RUNNER_TOKEN",
                 body={"source_event_id": f"{session_id}:final", "session_id": session_id,
                       "project_id": project_id, "worktree_id": worktree_id,
-                      "sequence_no": 1, "usage": counters.model_dump(mode="json")},
+                      "sequence_no": 1, "usage": parsed["usage"]},
             )
-    except Exception:
-        usage_status = 503
+        except Exception:
+            usage_status = 503
 
+    # P16A: For answer-producing tasks, missing final_answer CANNOT be marked succeeded!
+    succeeded = (rc == 0) and (delivery_status == "delivered") and bool(final_answer) and (not quota_error)
+    if succeeded:
+        summary_to_store = final_answer
+        err_code = None
+        err_sum = None
+    elif quota_error:
+        summary_to_store = None
+        err_code = "quota_exceeded"
+        err_sum = parsed["error_excerpt"] or "Provider quota exceeded"
+    elif rc == 0 and delivery_status != "delivered":
+        summary_to_store = None
+        err_code = "missing_final_answer"
+        err_sum = "Runner exited 0 but emitted no valid final answer."
+    else:
+        summary_to_store = None
+        err_code = f"cli_exit_{rc}"
+        err_sum = parsed["error_excerpt"] or f"Exit code {rc}"
 
     # Complete job on Memory Bridge (Bridge updates task, session & plan status atomically)
     cc, comp_resp = _bridge_request(
@@ -599,9 +616,9 @@ def execute_approved_plan(
             "accepted": None,
             "tests_passed": None,
             "duration_ms": duration_ms,
-            "handoff_summary": summary,
-            "error_code": None if succeeded else ("quota_exceeded" if quota_error else f"cli_exit_{rc}"),
-            "error_summary": None if succeeded else f"Exit code {rc}",
+            "handoff_summary": summary_to_store,
+            "error_code": err_code,
+            "error_summary": err_sum,
         },
     )
 
@@ -613,7 +630,11 @@ def execute_approved_plan(
         "model_id": model_id,
         "duration_ms": duration_ms,
         "exit_code": rc,
-        "message": "Kết quả đã lưu trong lịch sử" if cc == 200 else "Chưa xác nhận lưu kết quả",
+        "result_delivery_status": delivery_status,
+        "content_type": content_type,
+        "final_answer": final_answer,
+        "truncated": parsed["truncated"],
+        "message": "Đã nhận và lưu câu trả lời thực tế của AI" if (succeeded and cc == 200) else (err_sum or "Chưa nhận được kết quả hợp lệ"),
         "complete_response": comp_resp,
         "telemetry_status": usage_status,
     }
