@@ -15,7 +15,9 @@ from typing import Iterator
 
 from .errors import BridgeError
 
-CURRENT_SCHEMA_VERSION = 3
+from .trace_schema import TRACE_SQL
+
+CURRENT_SCHEMA_VERSION = 4
 
 MIGRATIONS: list[tuple[int, str, str]] = [
     (
@@ -521,6 +523,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_v2_audit_time ON v2_audit_log(project_id, created_at DESC);
         """,
     ),
+    (4, "execution_traces_v22", TRACE_SQL),
 ]
 
 
