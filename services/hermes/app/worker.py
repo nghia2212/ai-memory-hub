@@ -1,0 +1,131 @@
+"""Approval-gated, redacted, budget-bounded Hermes worker."""
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from .config import HermesConfig
+from .providers import ProviderError, SummarizationProvider, build_provider
+from .redactor import sanitize_event_payload
+
+ALLOWED_EVENT_KINDS = frozenset(
+    {"session_stop", "session_end", "task_completed", "decision_note", "handoff_created"}
+)
+
+
+class BridgeAPI(Protocol):
+    def fetch_approved_events(self, limit: int = 10) -> list[dict[str, Any]]:
+        ...
+
+    def post_candidate_result(self, result_payload: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+
+@dataclass
+class RunStats:
+    enabled: bool
+    fetched: int = 0
+    approved: int = 0
+    processed: int = 0
+    skipped_unapproved: int = 0
+    skipped_budget: int = 0
+    errors: int = 0
+    total_tokens: int = 0
+
+
+def is_event_approved(event: dict[str, Any], config: HermesConfig) -> bool:
+    """Deny by default: require explicit event approval and project-level opt-in."""
+    if event.get("approved") is not True:
+        return False
+    kind = str(event.get("kind") or "").lower()
+    if kind not in ALLOWED_EVENT_KINDS:
+        return False
+    project_id = str(event.get("project_id") or "")
+    if not project_id:
+        return False
+    if event.get("external_llm_approved") is True:
+        return True
+    return project_id in config.approved_projects
+
+
+def compute_idempotency_key(project_id: str, event_id: str, sanitized_payload: dict[str, Any]) -> str:
+    canonical = json.dumps(sanitized_payload, sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return f"hermes:{project_id}:{event_id}:{digest}"
+
+
+class HermesWorker:
+    def __init__(
+        self,
+        config: HermesConfig,
+        bridge: BridgeAPI,
+        provider: SummarizationProvider | None = None,
+    ) -> None:
+        self.config = config
+        self.bridge = bridge
+        self.provider = provider
+
+    def run_once(self) -> RunStats:
+        if not self.config.enabled:
+            return RunStats(enabled=False)
+
+        ready, _ = self.config.validate_for_run()
+        if not ready:
+            return RunStats(enabled=True, errors=1)
+
+        provider = self.provider or build_provider(self.config)
+        events = self.bridge.fetch_approved_events(limit=self.config.max_events_per_run)
+        stats = RunStats(enabled=True, fetched=len(events))
+
+        for event in events:
+            if not is_event_approved(event, self.config):
+                stats.skipped_unapproved += 1
+                continue
+
+            stats.approved += 1
+            if stats.total_tokens >= self.config.max_total_tokens_per_run:
+                stats.skipped_budget += 1
+                continue
+
+            project_id = str(event["project_id"])
+            worktree_id = str(event.get("worktree_id") or "")
+            task_id = str(event.get("task_id") or "")
+            event_source_agent = str(event.get("source_agent") or "")
+            event_id = str(event.get("id") or event.get("event_id") or "unknown")
+            event_kind = str(event.get("kind") or "session_end").lower()
+            raw_payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+            sanitized = sanitize_event_payload(raw_payload, max_chars=self.config.max_input_chars)
+
+            try:
+                summary = provider.summarize(event_kind, sanitized)
+                used_tokens = (summary.input_tokens or 0) + (summary.output_tokens or 0)
+                stats.total_tokens += used_tokens
+
+                candidate_payload = {
+                    "project_id": project_id,
+                    "worktree_id": worktree_id or None,
+                    "task_id": task_id or None,
+                    "event_id": event_id,
+                    "idempotency_key": compute_idempotency_key(project_id, event_id, sanitized),
+                    "state": "candidate",
+                    "type": summary.memory_type,
+                    "title": summary.title,
+                    "body": summary.summary,
+                    "tags": summary.tags,
+                    "source_agent": "hermes",
+                    "provenance": {
+                        "provider": summary.provider,
+                        "model": summary.model,
+                        "input_tokens": summary.input_tokens,
+                        "output_tokens": summary.output_tokens,
+                        "event_source_agent": event_source_agent or None,
+                    },
+                }
+                self.bridge.post_candidate_result(candidate_payload)
+                stats.processed += 1
+            except (ProviderError, Exception):
+                stats.errors += 1
+
+        return stats
