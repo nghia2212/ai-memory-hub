@@ -5,6 +5,7 @@ COPY services/memory-bridge/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY services/orchestrator/__init__.py /app/services/orchestrator/__init__.py
 COPY services/orchestrator/contracts.py /app/services/orchestrator/contracts.py
+COPY services/orchestrator/tool_packs /app/services/orchestrator/tool_packs
 COPY services/memory-bridge/app /app/app
 USER 10001:10001
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app

@@ -151,19 +151,30 @@ def create_trace_router(db, cfg):
         project_id: UUID,
         plan_id: UUID | None = None,
         task_id: UUID | None = None,
+        source: str = Query("all", pattern=r"^(all|hub|antigravity|claude|codex|gemini|session_monitor)$"),
         p=Depends(reader),
     ):
-        """P6A cascading scope options: Project -> Plan -> Task -> Attempt (real IDs, titles, status, timestamps)."""
+        """P6A + MCP321 P8.4 unified cascading scope options: Hub-managed plans + External monitor-only plans."""
         project = str(project_id)
         with db.read_conn() as conn:
             check_scope(conn, project, plan_id=str(plan_id) if plan_id else None, task_id=str(task_id) if task_id else None)
-            plans = [
-                dict(r)
+            plans = []
+            if source in ("all", "hub"):
                 for r in conn.execute(
                     "SELECT id, objective, status, created_at, updated_at FROM v2_plans WHERE project_id=? ORDER BY updated_at DESC LIMIT 100",
                     (project,),
-                ).fetchall()
-            ]
+                ).fetchall():
+                    plans.append({**dict(r), "title": r["objective"][:120], "source": "hub", "is_monitor_only": False})
+            if source != "hub":
+                ep_sql = "SELECT id, source_client, external_plan_id, title, objective, normalized_status AS status, revision_no, linked_session_id, linked_root_trace_id, created_at, updated_at FROM mcp321_external_plans WHERE project_id=? AND deleted_tombstone=0"
+                ep_args = [project]
+                if source != "all":
+                    ep_sql += " AND source_client=?"
+                    ep_args.append(source)
+                ep_sql += " ORDER BY updated_at DESC LIMIT 100"
+                for r in conn.execute(ep_sql, ep_args).fetchall():
+                    plans.append({**dict(r), "source": r["source_client"], "is_monitor_only": True})
+
             t_sql = "SELECT id, plan_id, task_key, title, state, assigned_agent, created_at, updated_at FROM v2_tasks WHERE project_id=?"
             t_args = [project]
             if plan_id:
@@ -182,10 +193,10 @@ def create_trace_router(db, cfg):
                 a_args.append(str(plan_id))
             a_sql += " ORDER BY a.started_at DESC LIMIT 200"
             attempts = [dict(r) for r in conn.execute(a_sql, a_args).fetchall()]
-            return {"project_id": project, "plans": plans, "tasks": tasks, "attempts": attempts}
+            return {"project_id": project, "source": source, "plans": plans, "tasks": tasks, "attempts": attempts}
 
     @router.get("")
-    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, task_id: UUID | None=None, attempt_id: UUID | None=None, include_descendants: bool=False, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), search: str | None=Query(None,max_length=200), sort: str=Query("time_asc", pattern=r"^(time_asc|time_desc|duration_desc|status)$"), p=Depends(reader)):
+    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, external_plan_id: str | None=None, task_id: UUID | None=None, attempt_id: UUID | None=None, include_descendants: bool=False, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), search: str | None=Query(None,max_length=200), sort: str=Query("time_asc", pattern=r"^(time_asc|time_desc|duration_desc|status)$"), p=Depends(reader)):
         project = str(project_id)
         filters = {"project_id":project,"worktree_id":worktree_id,"session_id":session_id,"plan_id":plan_id,"attempt_id":attempt_id,"root_trace_id":root_trace_id,"actor_id":actor_id,"model_id":model_id,"status":status}
         if task_id is not None and not include_descendants:
@@ -195,6 +206,15 @@ def create_trace_router(db, cfg):
             if v is not None:
                 clauses.append(k+"=?")
                 args.append(str(v))
+        if external_plan_id is not None:
+            # Explicit association / linked_root_trace_id / linked_session_id ONLY (never infer by timestamp/model!)
+            clauses.append(
+                "(root_trace_id IN (SELECT linked_root_trace_id FROM mcp321_external_plans WHERE id=? AND project_id=? AND deleted_tombstone=0 AND linked_root_trace_id IS NOT NULL) "
+                "OR session_id IN (SELECT linked_session_id FROM mcp321_external_plans WHERE id=? AND project_id=? AND deleted_tombstone=0 AND linked_session_id IS NOT NULL) "
+                "OR trace_id IN (SELECT trace_id FROM mcp321_trace_associations WHERE external_plan_id=? AND project_id=? AND trace_id IS NOT NULL) "
+                "OR session_id IN (SELECT session_id FROM mcp321_trace_associations WHERE external_plan_id=? AND project_id=? AND session_id IS NOT NULL))"
+            )
+            args.extend([external_plan_id, project, external_plan_id, project, external_plan_id, project, external_plan_id, project])
         if task_id is not None and include_descendants:
             # Explicit parent-child hierarchy ONLY (never misclassify DAG dependencies!)
             clauses.append(

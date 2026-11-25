@@ -42,6 +42,8 @@ from .v31_mcp_gateway import V31McpGatewayService
 from .v31_routes import create_v31_router
 from .v32_routes import create_v32_router
 from .v32_skill_service import V32SkillService
+from .v321_routes import create_v321_router
+from .v321_service import V321Mcp321Service
 from .trace_operations import trace_parent, trace_transport
 from .v2_service import V2BridgeService
 
@@ -355,6 +357,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     v32_skills = V32SkillService(db)
     app.state.v32_skill_service = v32_skills
     app.include_router(create_v32_router(v32_skills, cfg))
+    try:
+        from services.orchestrator.tool_packs import register_all_local_packs
+        register_all_local_packs(v31_gw)
+    except Exception:
+        logging.getLogger(__name__).warning("Optional local tool packs unavailable in current runtime.")
+    v321_svc = V321Mcp321Service(db, v31_gw)
+    app.state.v321_service = v321_svc
+    app.include_router(create_v321_router(v321_svc, cfg))
 
     # Mount FastMCP Streamable HTTP app at /mcp
     app.mount("/mcp", mcp_app)

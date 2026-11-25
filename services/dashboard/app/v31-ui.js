@@ -405,12 +405,60 @@
     try {
       const invParams = new URLSearchParams({ limit: "30" });
       if ($("v31-inv-biz")?.value) invParams.set("business_id", $("v31-inv-biz").value);
-      const [mon, srvs, invs] = await Promise.all([
+      const [mon, srvs, invs, cat] = await Promise.all([
         apiFetch("/api/v31/mcp/monitoring"),
         apiFetch("/api/v31/mcp/servers?include_archived=" + ($("v31-mcp-show-archived")?.checked ? "true" : "false")),
         apiFetch("/api/v31/mcp/invocations?" + invParams),
+        apiFetch("/api/v321/catalog").catch(() => ({ items: [] })),
       ]);
       cachedMcpServers = srvs.items || [];
+
+      const catBox = $("v321-mcp-catalog");
+      if (catBox) {
+        catBox.replaceChildren();
+        const cItems = cat.items || [];
+        if (!cItems.length) {
+          catBox.append(el("p", "Chưa có mục nào trong Danh mục đề xuất.", "trace-muted"));
+        } else {
+          const ctbl = el("table", null, "trace-table");
+          const chr = el("tr");
+          for (const h of ["Catalog Key", "Nhóm", "Transport", "Capabilities", "Yêu cầu Auth / Tài nguyên", "Trạng thái", "Thao tác"]) chr.append(el("th", h));
+          ctbl.append(chr);
+          for (const c of cItems) {
+            const tr = el("tr");
+            tr.append(
+              el("td", `${c.catalog_key} (${c.version})`),
+              el("td", c.category),
+              el("td", c.transport),
+              el("td", (c.capabilities || []).join(", ")),
+              el("td", `${(c.auth_requirements || []).join(", ") || "Không"} · ${c.resource_estimate}`),
+              el("td", c.lifecycle_state)
+            );
+            const tdA = el("td");
+            if (c.registered) {
+              tdA.append(el("span", "Đã đăng ký", "badge ok"));
+            } else {
+              const bReg = el("button", "Đăng ký vào Kho MCP", "secondary");
+              bReg.type = "button";
+              bReg.addEventListener("click", async () => {
+                try {
+                  const isLocal = c.transport === "local_tool";
+                  await apiFetch("/api/v321/catalog/register", {
+                    method: "POST",
+                    body: JSON.stringify({ catalog_key: c.catalog_key, preview_only: false, approve_immediately: isLocal }),
+                  });
+                  toast(isLocal ? `Đã đăng ký & discover ${c.catalog_key}!` : `Đã đăng ký ${c.catalog_key} (pending_approval).`);
+                  loadGatewayMcp();
+                } catch (e) { toast("Lỗi đăng ký catalog: " + e.message); }
+              });
+              tdA.append(bReg);
+            }
+            tr.append(tdA);
+            ctbl.append(tr);
+          }
+          catBox.append(ctbl);
+        }
+      }
 
       if (monBox) {
         monBox.replaceChildren();

@@ -483,6 +483,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="trace-filters">
           <label>Dự án<select id="trace-proj"></select></label>
           <label>Worktree<select id="trace-wt"></select></label>
+          <label>Nguồn Plan<select id="trace-source-sel"><option value="all">Tất cả (Hub + External)</option><option value="hub">Hub Managed</option><option value="antigravity">Antigravity (Monitor-only)</option><option value="claude">Claude Code</option><option value="codex">Codex CLI</option><option value="session_monitor">Session Monitor</option></select></label>
           <label>Plan (Chọn nhanh)<select id="trace-plan-sel"><option value="">Tất cả Plan</option></select></label>
           <label>Task (Chọn nhanh)<select id="trace-task-sel"><option value="">Tất cả Task</option></select></label>
           <label>Attempt (Chọn nhanh)<select id="trace-attempt-sel"><option value="">Tất cả Attempt</option></select></label>
@@ -692,6 +693,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div id="v31-route-result" style="margin-top:8px"></div>
           <div style="display:none"><input id="mcp-route-caps" value="code_search"><input id="mcp-route-write" type="checkbox"><button id="mcp-route-btn" type="button"></button><div id="mcp-route-result"></div></div>
         </div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>Danh mục MCP đề xuất (Candidate Catalog — V3.2.1, tách biệt với server đã cài)</h3>
+        <div id="v321-mcp-catalog">Đang tải danh mục đề xuất...</div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <h3>Danh sách MCP &amp; Công cụ đã đăng ký</h3>

@@ -245,13 +245,13 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     @app.get("/api/v2/traces/scope-options")
     async def api_traces_scope_options(request: Request):
         _require_session(request)
-        allowed = {"project_id", "plan_id", "task_id"}
+        allowed = {"project_id", "plan_id", "task_id", "source"}
         return await _proxy_bridge("GET", "/v2/traces/scope-options", params={k: v for k, v in request.query_params.items() if k in allowed})
 
     @app.get("/api/v2/traces")
     async def api_traces(request: Request):
         _require_session(request)
-        allowed = {"project_id","worktree_id","plan_id","task_id","attempt_id","include_descendants","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
+        allowed = {"project_id","worktree_id","plan_id","external_plan_id","task_id","attempt_id","include_descendants","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
         return await _proxy_bridge("GET","/v2/traces",params={k:v for k,v in request.query_params.items() if k in allowed})
 
     @app.get("/api/v2/traces/export")
@@ -1232,6 +1232,44 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v32_review(candidate_id: str, request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("POST", f"/v32/candidates/{candidate_id}/review", use_admin=True, json_body=await request.json())
+
+    # --- V3.2.1 (MCP321) Candidate Catalog & External Plans Proxy Routes (all auth/CSRF enforced) ---
+    @app.get("/api/v321/catalog")
+    async def api_v321_catalog(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"category"}
+        return await _proxy_bridge("GET", "/v321/catalog", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v321/catalog/register")
+    async def api_v321_catalog_register(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/catalog/register", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v321/external-plans")
+    async def api_v321_external_plans(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "source_client", "include_deleted"}
+        return await _proxy_bridge("GET", "/v321/external-plans", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v321/external-plans/ingest")
+    async def api_v321_ingest_external_plan(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/external-plans/ingest", planner=True, json_body=await request.json())
+
+    @app.post("/api/v321/external-plans/from-session")
+    async def api_v321_from_session(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/external-plans/from-session", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v321/external-plans/associate")
+    async def api_v321_associate(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/external-plans/associate", use_admin=True, json_body=await request.json())
+
+    @app.delete("/api/v321/external-plans/{plan_id}")
+    async def api_v321_delete_external_plan(plan_id: str, project_id: UUID, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("DELETE", f"/v321/external-plans/{plan_id}", use_admin=True, params={"project_id": str(project_id)})
 
     return app
 

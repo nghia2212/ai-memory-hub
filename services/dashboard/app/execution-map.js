@@ -48,11 +48,15 @@
   let collapsedGroups = new Set(), hiddenCols = new Set(["cache_read_tokens", "reasoning_tokens", "provider"]);
   let timeZoomScale = 1.0;
 
+  let selectedExternalPlanId = "";
+  let scopePlansMeta = {};
+
   function filters() {
     const q = {
       project_id: $("trace-proj").value,
       worktree_id: $("trace-wt").value,
-      plan_id: $("trace-plan").value.trim(),
+      plan_id: selectedExternalPlanId ? "" : $("trace-plan").value.trim(),
+      external_plan_id: selectedExternalPlanId,
       task_id: $("trace-task").value.trim(),
       attempt_id: ($("trace-attempt")?.value || "").trim(),
       session_id: $("trace-session").value.trim(),
@@ -75,7 +79,12 @@
     const bc = $("trace-breadcrumb");
     if (!bc) return;
     const parts = ["Dự án"];
-    if ($("trace-plan").value.trim()) parts.push(`Plan ${$("trace-plan").value.trim().slice(0, 8)}`);
+    if (selectedExternalPlanId) {
+      const meta = scopePlansMeta[selectedExternalPlanId];
+      parts.push(`External Plan [${meta?.source || "external"} · Monitor-only] ${selectedExternalPlanId.slice(0, 8)}`);
+    } else if ($("trace-plan").value.trim()) {
+      parts.push(`Plan ${$("trace-plan").value.trim().slice(0, 8)}`);
+    }
     if ($("trace-task").value.trim()) parts.push(`Task ${$("trace-task").value.trim().slice(0, 8)}`);
     if ($("trace-attempt")?.value.trim()) parts.push(`Attempt ${$("trace-attempt").value.trim().slice(0, 8)}`);
     bc.textContent = "Phạm vi: " + parts.join(" → ");
@@ -89,19 +98,26 @@
     if (!pid || !planSel || !taskSel || !attSel) return;
     const myEpoch = ++scopeEpoch;
     const params = new URLSearchParams({ project_id: pid });
-    const curPlan = $("trace-plan").value.trim();
+    const src = $("trace-source-sel")?.value || "all";
+    params.set("source", src);
+    const curPlan = selectedExternalPlanId || $("trace-plan").value.trim();
     const curTask = $("trace-task").value.trim();
     const curAtt = ($("trace-attempt")?.value || "").trim();
-    if (curPlan) params.set("plan_id", curPlan);
+    if (!selectedExternalPlanId && $("trace-plan").value.trim()) params.set("plan_id", $("trace-plan").value.trim());
     if (curTask) params.set("task_id", curTask);
     try {
       const data = await apiFetch("/api/v2/traces/scope-options?" + params);
       if (myEpoch !== scopeEpoch) return; // Discard stale response on rapid switching
+      scopePlansMeta = {};
+      for (const p of data.plans || []) scopePlansMeta[p.id] = p;
       planSel.replaceChildren(
         new Option("Tất cả Plan", ""),
-        ...(data.plans || []).map(p => new Option(`[${p.status}] ${(p.objective || p.id).slice(0, 48)}`, p.id))
+        ...(data.plans || []).map(p => {
+          const tag = p.is_monitor_only ? `[${p.source} · Monitor-only · rev ${p.revision_no || 1}]` : `[Hub · ${p.status}]`;
+          return new Option(`${tag} ${(p.title || p.objective || p.id).slice(0, 52)}`, p.id);
+        })
       );
-      if (curPlan) planSel.value = curPlan;
+      if (curPlan && scopePlansMeta[curPlan]) planSel.value = curPlan;
       taskSel.replaceChildren(
         new Option("Tất cả Task", ""),
         ...(data.tasks || []).map(t => new Option(`[${t.state}] ${t.task_key}: ${(t.title || t.id).slice(0, 40)}`, t.id))
@@ -913,8 +929,24 @@
       syncScopeOptions();
       load();
     });
+    $("trace-source-sel")?.addEventListener("change", () => {
+      selectedExternalPlanId = "";
+      $("trace-plan").value = "";
+      $("trace-task").value = "";
+      if ($("trace-attempt")) $("trace-attempt").value = "";
+      syncScopeOptions();
+      load();
+    });
     $("trace-plan-sel")?.addEventListener("change", () => {
-      $("trace-plan").value = $("trace-plan-sel").value;
+      const val = $("trace-plan-sel").value;
+      const meta = scopePlansMeta[val];
+      if (meta?.is_monitor_only) {
+        selectedExternalPlanId = val;
+        $("trace-plan").value = "";
+      } else {
+        selectedExternalPlanId = "";
+        $("trace-plan").value = val;
+      }
       $("trace-task").value = "";
       if ($("trace-attempt")) $("trace-attempt").value = "";
       syncScopeOptions();
@@ -933,6 +965,8 @@
     });
     $("trace-descendants")?.addEventListener("change", () => load());
     $("trace-scope-clear")?.addEventListener("click", () => {
+      selectedExternalPlanId = "";
+      if ($("trace-source-sel")) $("trace-source-sel").value = "all";
       for (const id of ["trace-plan", "trace-task", "trace-attempt", "trace-session"]) { if ($(id)) $(id).value = ""; }
       if ($("trace-descendants")) $("trace-descendants").checked = false;
       syncScopeOptions();
