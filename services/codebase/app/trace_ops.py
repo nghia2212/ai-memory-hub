@@ -9,9 +9,10 @@ import os
 import httpx
 
 _scope = ContextVar("codebase_trace_scope", default=None)
+trace_parent = ContextVar("codebase_trace_parent", default=None)
 log = logging.getLogger(__name__)
 
-async def emit(name, started, error=None, *, mcp=True, parent=None):
+async def emit(name, started, error=None, *, mcp=True):
     scope = _scope.get()
     url = os.environ.get("BRIDGE_URL")
     token = os.environ.get("BRIDGE_TRACE_TOKEN")
@@ -30,7 +31,7 @@ async def emit(name, started, error=None, *, mcp=True, parent=None):
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             r = await client.post(url.rstrip("/")+"/v2/traces", json=payload,
-                                  headers={"Authorization":"Bearer "+token})
+                                  headers={"Authorization":"Bearer "+token, **({"X-Trace-Parent":trace_parent.get()} if trace_parent.get() else {})})
             r.raise_for_status()
     except Exception:
         log.warning("Codebase trace delivery failed: %s", name)
@@ -54,7 +55,10 @@ async def observe_rpc(name, call):
     started = datetime.now(timezone.utc)
     error = None
     try:
-        return await call()
+        response = await call()
+        if isinstance(response,dict) and ("error" in response or (response.get("result") or {}).get("isError")):
+            error = RuntimeError("MCP tool returned an error")
+        return response
     except Exception as exc:
         error = exc
         raise
