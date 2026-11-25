@@ -1,11 +1,12 @@
-# Roadmap AI Memory Hub V3.3–V4.0
+# Roadmap AI Memory Hub V3.2.1–V4.0
 Ngày: 2026-11-25. Trạng thái: PLANNED. Không phải xác nhận triển khai.
-Nguồn kế thừa: docs/v32/IMPLEMENTATION-PLAN.md (SK32, gồm P6A). V3.1 đang được Gemini triển khai theo thông tin người dùng.
-Các số phiên bản dưới đây là release sản phẩm mới, không trùng milestone Conversation History cũ: EX33, KQ34, OPS35, DIST40.
+Nguồn kế thừa: docs/v32/IMPLEMENTATION-PLAN.md (SK32, gồm P6A). V3.1 đã triển khai theo báo cáo người dùng nhưng còn thiếu MCP chuyên biệt; SK32 đang triển khai. MCP321 xử lý khoảng trống này sau SK32.
+Các số phiên bản dưới đây là release sản phẩm mới, không trùng milestone Conversation History cũ: MCP321, EX33, KQ34, OPS35, DIST40.
 ## Thứ tự bắt buộc
-V3.1 accepted -> SK32 accepted -> EX33 -> KQ34 -> OPS35 -> DIST40. Không tự động bắt đầu release sau, không thay đổi nhánh đang chạy. Mỗi release tạo branch từ HEAD đã nghiệm thu của release trước, cherry-pick/copy tài liệu kế hoạch nếu chưa có, ghi SHA và mở draft PR về nhánh tích hợp được duyệt. Không dùng HEAD của nhánh thiết kế làm baseline runtime. Không merge main/deploy hoặc upgrade live nếu chưa được phép.
+V3.1 accepted -> SK32 accepted -> MCP321 accepted -> EX33 -> KQ34 -> OPS35 -> DIST40. Không tự động bắt đầu release sau, không thay đổi nhánh đang chạy. Mỗi release tạo branch từ HEAD đã nghiệm thu của release trước, cherry-pick/copy tài liệu kế hoạch nếu chưa có, ghi SHA và mở draft PR về nhánh tích hợp được duyệt. Không dùng HEAD của nhánh thiết kế làm baseline runtime. Không merge main/deploy hoặc upgrade live nếu chưa được phép.
 | Release | Scope | Plan | Gate |
 |---|---|---|---|
+| V3.2.1 MCP321 | MCP catalog & real specialized integrations | [Plan](V321-MCP321.md) | Real handshake/tool calls, business/project/skill binding, task traces and permissions |
 | V3.3 EX33 | Adaptive execution & model continuity | [Plan](V33-EX33.md) | Fast/Standard/Advanced, real cross-client handoff, policy and budget |
 | V3.4 KQ34 | Knowledge quality | [Plan](V34-KQ34.md) | Requirement traceability, staleness, skill quality, regression |
 | V3.5 OPS35 | Self-managing platform | [Plan](V35-OPS35.md) | Health, compatibility, resource profiles, tested restore |
