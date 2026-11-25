@@ -15,6 +15,8 @@ from .schemas import (
 from .security import current_mcp_principal, require_scope
 from .service import MemoryBridgeService
 from .v3_service import V3BridgeService
+from .v32_skill_schema import SkillResolveRequest
+from .v32_skill_service import V32SkillService
 
 
 def _require_mcp_scope(scope: str) -> None:
@@ -142,5 +144,40 @@ def create_mcp_server(service: MemoryBridgeService) -> FastMCP:
             limit=limit,
             max_chars=max_chars,
         )
+
+    @mcp.tool()
+    def list_skills(namespace: str | None = None, tag: str | None = None, search: str = "") -> dict[str, Any]:
+        """List active published skills in the centralized SK32 Skill Registry (read-only, 0 LLM)."""
+        svc = V32SkillService(service.db)
+        return svc.list_skills(namespace=namespace, lifecycle="active", tag=tag, search=search)
+
+    @mcp.tool()
+    def resolve_skills(
+        project_id: str,
+        worktree_id: str | None = None,
+        business_id: str | None = None,
+        agent_role: str | None = None,
+        required_capabilities: list[str] | None = None,
+        max_chars: int = 16000,
+    ) -> dict[str, Any]:
+        """Deterministically resolve applicable skills for a project/business/role within budget (read-only, 0 LLM)."""
+        svc = V32SkillService(service.db)
+        req = SkillResolveRequest(
+            project_id=UUID(project_id),
+            worktree_id=UUID(worktree_id) if worktree_id else None,
+            business_id=business_id,
+            agent_role=agent_role,
+            required_capabilities=required_capabilities or [],
+            max_chars=max_chars,
+            adapter="mcp_read",
+            record_run=False,
+        )
+        return svc.resolve_skills(req)
+
+    @mcp.tool()
+    def get_skill_version(skill_id: str, version_id: str | None = None) -> dict[str, Any]:
+        """Retrieve immutable published SKILL.md and manifest for a specific skill version (read-only)."""
+        svc = V32SkillService(service.db)
+        return svc.get_skill_version(skill_id, version_id=version_id)
 
     return mcp
