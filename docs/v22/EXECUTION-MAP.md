@@ -43,6 +43,13 @@ not traced. Historical V2.1 events are not backfilled. QA evidence is displayed
 when explicitly supplied; automatic fine-grained QA capture is not complete.
 No dynamic MCP discovery/activation is introduced by this version.
 
+## V2.2.4 Upgrades
+
+- Unified Execution Workspace across all 4 views (`Graph`, `Swimlane`, `Timeline`, `Table`) with viewport-bound independent horizontal/vertical scrolling, sticky toolbar/headers, zoom/pan/fit, compact/detailed density, fullscreen mode, resizable 6-tab Detail Panel, and state preservation across auto-refresh.
+- Global `execution_sequence` ordered by `(started_at, trace_id)` independent of pagination/filters, with `timestamp_tie`, `late_arrival`, and separated `planned_steps`.
+- Multi-level deterministic summaries (`summary`, `groups`, `step_summary`) with 0 LLM calls; `progress_pct` is computed only when a reliable `planned_steps_count` denominator exists.
+- Token Telemetry Collector (`services/orchestrator/usage_collector.py`) and Inspector (`GET /v2/traces/telemetry/inspector`), plus `GET /v2/traces/export?format=json|csv`. See [TELEMETRY-COVERAGE.md](TELEMETRY-COVERAGE.md) and [PATCH-4.md](PATCH-4.md).
+
 ## Windows acceptance
 
 Use scripts/Test-V22.ps1 from the repository or its downloadable copy.

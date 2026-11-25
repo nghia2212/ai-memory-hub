@@ -7,8 +7,9 @@ Nhánh hiện tại: `fix/v223-stability-security`
 | Milestone | Phạm vi | Trạng thái | Ghi chú |
 |---|---|---|---|
 | **M0** | Coding Execution Readiness Audit | **COMPLETED** | Session `23c9cb7d-2834-4699-a2f0-9a3d2e30ffa1`, Root Trace `63a3fdfa-32ef-4846-a5b3-4f6ddcb5f4e3`, Candidate Memory `01531082-aae6-4f4e-9122-d6d623e16491`, Handoff `V3-M1` `1831d0ca-917d-4df6-8fc3-ea55d9c29aa0`. |
-| **M0.5 / V2.2.3** | Stability & Security (Codebase MCP 503, Dashboard Auth/CSRF, Brain Config Gemini 4, Pre-approval Quota Guard, Long Prompt stdin) | **IN_REVIEW** | Triển khai trên `fix/v223-stability-security`; chờ người dùng nghiệm thu trước khi bắt đầu M1. |
-| **M1** | Coding Execution Engine (4 chế độ: Analysis, Coding, Testing, Git Delivery) | **PLANNED** | Chờ duyệt sau M0.5. |
+| **M0.5 / V2.2.3** | Stability & Security (Codebase MCP 503, Dashboard Auth/CSRF, Brain Config Gemini 4, Pre-approval Quota Guard, Long Prompt stdin) | **COMPLETED** | Commit `0c4dd7d`, 34/34 pytest PASS, Codebase 1.760 nodes / 6.634 edges. |
+| **V2.2.4** | Execution Map Workspace, Execution Order, Multi-level Summary, Token Telemetry Collector & Inspector | **IN_REVIEW** | Triển khai tiếp trên `fix/v223-stability-security`; bước hoàn thiện observability trước M1. |
+| **M1** | Coding Execution Engine (4 chế độ: Analysis, Coding, Testing, Git Delivery) | **PLANNED** | Chờ duyệt sau V2.2.4. |
 | **M2 / V3.0** | Dynamic MCP Registry & Scoped Routing | **PLANNED** | Chờ duyệt sau M1. |
 | **M3 / V3.1** | Conversation Collector (Claude, Codex, Antigravity) | **PLANNED** | Đã khảo sát định dạng JSONL thực tế ở M0. |
 | **M4 / V3.2** | Conversation Storage & Dashboard UI | **PLANNED** | Migration v6 additive. |
