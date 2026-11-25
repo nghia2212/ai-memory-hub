@@ -26,3 +26,6 @@ All items below are planned, not completed.
 5. Lead: freeze interfaces, review PRs, integrate, run build and Docker smoke tests on Windows, then proceed to P1. Do not merge untested components as production-ready.
 
 Each agent uses a separate branch and PR, includes exact test commands/results and notes any unverified upstream assumptions. Never expose API keys or private project code in logs, fixtures or commits.
+
+## V3 proposed extension (queued)
+See [Dynamic MCP Platform](v3/README.md), [milestones and QA](v3/QA-ROADMAP.md), [agent board](v3/AGENT-BOARD.md). No implementation before validated V2; this design does not change V1/V2 release gates.

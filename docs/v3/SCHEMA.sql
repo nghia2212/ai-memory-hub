@@ -1,0 +1,23 @@
+-- PROPOSED additive schema; Lead assigns actual migration number after V2.
+-- UUIDs TEXT, UTC ISO timestamps TEXT; Bridge sole writer. Existing V2 foreign keys
+-- must be mapped against final schema before migration. No raw credentials.
+PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS mcp_plugins(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN(0,1)), active_revision TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mcp_revisions(id TEXT PRIMARY KEY, plugin_id TEXT NOT NULL REFERENCES mcp_plugins(id), revision INTEGER NOT NULL, manifest_json TEXT NOT NULL, manifest_hash TEXT NOT NULL, provenance_json TEXT NOT NULL, trust_state TEXT NOT NULL CHECK(trust_state IN('draft','quarantined','verified','retired')), created_at TEXT NOT NULL, UNIQUE(plugin_id,revision), UNIQUE(plugin_id,manifest_hash));
+CREATE TABLE IF NOT EXISTS mcp_tools(id TEXT PRIMARY KEY, revision_id TEXT NOT NULL REFERENCES mcp_revisions(id), upstream_name TEXT NOT NULL, schema_hash TEXT NOT NULL, schema_json TEXT NOT NULL, action_class TEXT NOT NULL DEFAULT 'unknown', verified INTEGER NOT NULL DEFAULT 0 CHECK(verified IN(0,1)), UNIQUE(revision_id,upstream_name,schema_hash));
+CREATE TABLE IF NOT EXISTS mcp_profiles(id TEXT PRIMARY KEY, project_id TEXT, name TEXT NOT NULL, revision INTEGER NOT NULL, definition_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mcp_grants(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, worktree_id TEXT NOT NULL, principal_id TEXT NOT NULL, revision_id TEXT NOT NULL REFERENCES mcp_revisions(id), tool_id TEXT NOT NULL REFERENCES mcp_tools(id), scope_json TEXT NOT NULL, approval_ref TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT);
+CREATE TABLE IF NOT EXISTS mcp_operations(id TEXT PRIMARY KEY, plugin_id TEXT NOT NULL REFERENCES mcp_plugins(id), revision_id TEXT REFERENCES mcp_revisions(id), kind TEXT NOT NULL, state TEXT NOT NULL, actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, error_code TEXT, UNIQUE(actor_id,idempotency_key));
+CREATE TABLE IF NOT EXISTS mcp_instances(id TEXT PRIMARY KEY, revision_id TEXT NOT NULL REFERENCES mcp_revisions(id), isolation_key TEXT NOT NULL, runtime_kind TEXT NOT NULL, ownership TEXT NOT NULL, runtime_identity TEXT, state TEXT NOT NULL, last_seen_at TEXT, resource_json TEXT NOT NULL DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS mcp_leases(id TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES mcp_instances(id), project_id TEXT NOT NULL, worktree_id TEXT NOT NULL, principal_id TEXT NOT NULL, plan_revision_id TEXT, task_id TEXT, session_id TEXT, state TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mcp_calls(id TEXT PRIMARY KEY, lease_id TEXT NOT NULL REFERENCES mcp_leases(id), tool_id TEXT NOT NULL REFERENCES mcp_tools(id), schema_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL, state TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, metrics_json TEXT NOT NULL DEFAULT '{}', error_code TEXT, UNIQUE(lease_id,idempotency_key));
+CREATE TABLE IF NOT EXISTS mcp_workflows(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mcp_workflow_revisions(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES mcp_workflows(id), revision INTEGER NOT NULL, content_hash TEXT NOT NULL, artifact_ref TEXT NOT NULL, contract_json TEXT NOT NULL, approval_ref TEXT, created_at TEXT NOT NULL, UNIQUE(workflow_id,revision));
+CREATE TABLE IF NOT EXISTS mcp_executions(id TEXT PRIMARY KEY, workflow_revision_id TEXT REFERENCES mcp_workflow_revisions(id), project_id TEXT NOT NULL, worktree_id TEXT NOT NULL, session_id TEXT, state TEXT NOT NULL, metrics_json TEXT NOT NULL DEFAULT '{}', started_at TEXT NOT NULL, finished_at TEXT);
+CREATE TABLE IF NOT EXISTS mcp_audit(id TEXT PRIMARY KEY, project_id TEXT, worktree_id TEXT, actor_id TEXT NOT NULL, action TEXT NOT NULL, target_id TEXT NOT NULL, decision TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS mcp_grants_scope ON mcp_grants(project_id,worktree_id,principal_id,expires_at);
+CREATE INDEX IF NOT EXISTS mcp_leases_expiry ON mcp_leases(state,expires_at);
+CREATE INDEX IF NOT EXISTS mcp_audit_scope ON mcp_audit(project_id,created_at);
+-- Lead must add composite scope/revision validation, active_revision FK invariant,
+-- atomic resource reservation/idempotency transaction, catalog snapshots, resource samples,
+-- explicit retention/deletion and migration/rollback tests against final V2 schema.
