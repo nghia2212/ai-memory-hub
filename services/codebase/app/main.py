@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from .auth import verify_bearer
+from .trace_ops import trace_parent
 from .cbm_client import CBMBackend, StdioCBMClient
 from .config import Settings
 from .models import (
@@ -80,6 +81,14 @@ def create_app(
         store.close()
 
     app = FastAPI(title="AI Memory Hub Codebase Adapter", version="1.0.0", lifespan=lifespan)
+    @app.middleware("http")
+    async def trace_context(request: Request, call_next):
+        token = trace_parent.set(request.headers.get("X-Trace-Parent"))
+        try:
+            return await call_next(request)
+        finally:
+            trace_parent.reset(token)
+
     app.state.settings = cfg
     app.state.store = store
     app.state.registry = reg
