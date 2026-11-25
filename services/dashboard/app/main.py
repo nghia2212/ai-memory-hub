@@ -238,16 +238,26 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     def v31_ui_js():
         return Response(Path(__file__).with_name("v31-ui.js").read_bytes(), media_type="application/javascript")
 
+    @app.get("/v32-ui.js")
+    def v32_ui_js():
+        return Response(Path(__file__).with_name("v32-ui.js").read_bytes(), media_type="application/javascript")
+
+    @app.get("/api/v2/traces/scope-options")
+    async def api_traces_scope_options(request: Request):
+        _require_session(request)
+        allowed = {"project_id", "plan_id", "task_id"}
+        return await _proxy_bridge("GET", "/v2/traces/scope-options", params={k: v for k, v in request.query_params.items() if k in allowed})
+
     @app.get("/api/v2/traces")
     async def api_traces(request: Request):
         _require_session(request)
-        allowed = {"project_id","worktree_id","plan_id","task_id","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
+        allowed = {"project_id","worktree_id","plan_id","task_id","attempt_id","include_descendants","session_id","root_trace_id","actor_id","model_id","status","from_time","to_time","limit","offset","search","sort"}
         return await _proxy_bridge("GET","/v2/traces",params={k:v for k,v in request.query_params.items() if k in allowed})
 
     @app.get("/api/v2/traces/export")
     async def api_traces_export(request: Request):
         _require_session(request)
-        allowed = {"project_id", "worktree_id", "plan_id", "task_id", "session_id", "status", "format", "limit"}
+        allowed = {"project_id", "worktree_id", "plan_id", "task_id", "attempt_id", "include_descendants", "session_id", "status", "format", "limit"}
         params = {k: v for k, v in request.query_params.items() if k in allowed}
         fmt = params.get("format", "json")
         if fmt == "csv":
@@ -1132,6 +1142,96 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v31_register_asset(request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("POST", "/v31/assets", use_admin=True, json_body=await request.json())
+
+    # --- V3.2 (SK32) Centralized Skill Management Proxy Routes (all auth/CSRF enforced) ---
+    @app.get("/api/v32/skills")
+    async def api_v32_list_skills(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"namespace", "lifecycle", "tag", "search", "include_starter"}
+        return await _proxy_bridge("GET", "/v32/skills", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v32/skills")
+    async def api_v32_create_skill(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v32/skills", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v32/skills/import")
+    async def api_v32_import_skill(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v32/skills/import", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v32/skills/{skill_id}")
+    async def api_v32_get_skill(skill_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v32/skills/{skill_id}")
+
+    @app.post("/api/v32/skills/{skill_id}/drafts")
+    async def api_v32_save_draft(skill_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v32/skills/{skill_id}/drafts", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v32/skills/{skill_id}/publish")
+    async def api_v32_publish_skill(skill_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v32/skills/{skill_id}/publish", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v32/skills/{skill_id}/rollback")
+    async def api_v32_rollback_skill(skill_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v32/skills/{skill_id}/rollback", use_admin=True, json_body=await request.json())
+
+    @app.delete("/api/v32/skills/{skill_id}")
+    async def api_v32_delete_skill(skill_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("DELETE", f"/v32/skills/{skill_id}", use_admin=True)
+
+    @app.get("/api/v32/skills/{skill_id}/export")
+    async def api_v32_export_skill(skill_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v32/skills/{skill_id}/export")
+
+    @app.get("/api/v32/bindings")
+    async def api_v32_list_bindings(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"scope_type", "scope_id", "skill_id"}
+        return await _proxy_bridge("GET", "/v32/bindings", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v32/bindings")
+    async def api_v32_upsert_binding(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v32/bindings", use_admin=True, json_body=await request.json())
+
+    @app.delete("/api/v32/bindings/{binding_id}")
+    async def api_v32_delete_binding(binding_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("DELETE", f"/v32/bindings/{binding_id}", use_admin=True)
+
+    @app.post("/api/v32/resolve")
+    async def api_v32_resolve(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v32/resolve", planner=True, json_body=await request.json())
+
+    @app.get("/api/v32/runs")
+    async def api_v32_runs(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "plan_id", "task_id", "attempt_id", "session_id", "limit"}
+        return await _proxy_bridge("GET", "/v32/runs", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.get("/api/v32/candidates")
+    async def api_v32_candidates(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "status"}
+        return await _proxy_bridge("GET", "/v32/candidates", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v32/candidates/propose")
+    async def api_v32_propose(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v32/candidates/propose", planner=True, json_body=await request.json())
+
+    @app.post("/api/v32/candidates/{candidate_id}/review")
+    async def api_v32_review(candidate_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v32/candidates/{candidate_id}/review", use_admin=True, json_body=await request.json())
 
     return app
 

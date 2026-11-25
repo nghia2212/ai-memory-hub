@@ -54,6 +54,7 @@
       worktree_id: $("trace-wt").value,
       plan_id: $("trace-plan").value.trim(),
       task_id: $("trace-task").value.trim(),
+      attempt_id: ($("trace-attempt")?.value || "").trim(),
       session_id: $("trace-session").value.trim(),
       actor_id: $("trace-agent").value.trim(),
       model_id: $("trace-model").value.trim(),
@@ -61,11 +62,60 @@
       search: $("trace-search").value.trim(),
       sort: $("trace-sort").value,
     };
+    if ($("trace-descendants")?.checked && q.task_id) q.include_descendants = "true";
     for (const [key, id] of [["from_time", "trace-from"], ["to_time", "trace-to"]]) {
       const v = $(id).value;
       if (v) q[key] = new Date(v + "+07:00").toISOString();
     }
     return Object.fromEntries(Object.entries(q).filter(([, v]) => v));
+  }
+
+  let scopeEpoch = 0;
+  function updateBreadcrumb() {
+    const bc = $("trace-breadcrumb");
+    if (!bc) return;
+    const parts = ["Dự án"];
+    if ($("trace-plan").value.trim()) parts.push(`Plan ${$("trace-plan").value.trim().slice(0, 8)}`);
+    if ($("trace-task").value.trim()) parts.push(`Task ${$("trace-task").value.trim().slice(0, 8)}`);
+    if ($("trace-attempt")?.value.trim()) parts.push(`Attempt ${$("trace-attempt").value.trim().slice(0, 8)}`);
+    bc.textContent = "Phạm vi: " + parts.join(" → ");
+  }
+
+  async function syncScopeOptions() {
+    const pid = $("trace-proj")?.value;
+    const planSel = $("trace-plan-sel");
+    const taskSel = $("trace-task-sel");
+    const attSel = $("trace-attempt-sel");
+    if (!pid || !planSel || !taskSel || !attSel) return;
+    const myEpoch = ++scopeEpoch;
+    const params = new URLSearchParams({ project_id: pid });
+    const curPlan = $("trace-plan").value.trim();
+    const curTask = $("trace-task").value.trim();
+    const curAtt = ($("trace-attempt")?.value || "").trim();
+    if (curPlan) params.set("plan_id", curPlan);
+    if (curTask) params.set("task_id", curTask);
+    try {
+      const data = await apiFetch("/api/v2/traces/scope-options?" + params);
+      if (myEpoch !== scopeEpoch) return; // Discard stale response on rapid switching
+      planSel.replaceChildren(
+        new Option("Tất cả Plan", ""),
+        ...(data.plans || []).map(p => new Option(`[${p.status}] ${(p.objective || p.id).slice(0, 48)}`, p.id))
+      );
+      if (curPlan) planSel.value = curPlan;
+      taskSel.replaceChildren(
+        new Option("Tất cả Task", ""),
+        ...(data.tasks || []).map(t => new Option(`[${t.state}] ${t.task_key}: ${(t.title || t.id).slice(0, 40)}`, t.id))
+      );
+      if (curTask) taskSel.value = curTask;
+      attSel.replaceChildren(
+        new Option("Tất cả Attempt", ""),
+        ...(data.attempts || []).map(a => new Option(`#${a.attempt_number} [${a.status}] (${a.id.slice(0, 8)})`, a.id))
+      );
+      if (curAtt) attSel.value = curAtt;
+      updateBreadcrumb();
+    } catch (_) {
+      // Non-fatal if scope options cannot be loaded
+    }
   }
 
   function sync() {
@@ -841,14 +891,16 @@
     }
   }
 
-  window.openExecutionMap = (project, plan = "", task = "", session = "") => {
+  window.openExecutionMap = (project, plan = "", task = "", session = "", attempt = "") => {
     $("trace-proj").value = project;
     sync();
     $("trace-wt").value = "";
     $("trace-plan").value = plan;
     $("trace-task").value = task;
+    if ($("trace-attempt")) $("trace-attempt").value = attempt;
     $("trace-session").value = session;
     for (const id of ["trace-agent", "trace-model", "trace-status", "trace-from", "trace-to", "trace-search"]) $(id).value = "";
+    syncScopeOptions();
     showTab("traces", $("trace-nav"));
   };
 
@@ -857,15 +909,41 @@
     setupInteractions();
     $("trace-proj").addEventListener("change", () => {
       sync();
-      for (const id of ["trace-plan", "trace-task", "trace-session"]) $(id).value = "";
+      for (const id of ["trace-plan", "trace-task", "trace-attempt", "trace-session"]) { if ($(id)) $(id).value = ""; }
+      syncScopeOptions();
       load();
     });
-    $("trace-refresh").addEventListener("click", () => load());
+    $("trace-plan-sel")?.addEventListener("change", () => {
+      $("trace-plan").value = $("trace-plan-sel").value;
+      $("trace-task").value = "";
+      if ($("trace-attempt")) $("trace-attempt").value = "";
+      syncScopeOptions();
+      load();
+    });
+    $("trace-task-sel")?.addEventListener("change", () => {
+      $("trace-task").value = $("trace-task-sel").value;
+      if ($("trace-attempt")) $("trace-attempt").value = "";
+      syncScopeOptions();
+      load();
+    });
+    $("trace-attempt-sel")?.addEventListener("change", () => {
+      if ($("trace-attempt")) $("trace-attempt").value = $("trace-attempt-sel").value;
+      updateBreadcrumb();
+      load();
+    });
+    $("trace-descendants")?.addEventListener("change", () => load());
+    $("trace-scope-clear")?.addEventListener("click", () => {
+      for (const id of ["trace-plan", "trace-task", "trace-attempt", "trace-session"]) { if ($(id)) $(id).value = ""; }
+      if ($("trace-descendants")) $("trace-descendants").checked = false;
+      syncScopeOptions();
+      load();
+    });
+    $("trace-refresh").addEventListener("click", () => { syncScopeOptions(); load(); });
     $("trace-sort").addEventListener("change", () => load());
     $("trace-search").addEventListener("keydown", e => { if (e.key === "Enter") load(); });
     $("trace-prev").addEventListener("click", () => { offset = Math.max(0, offset - 100); load(false); });
     $("trace-next").addEventListener("click", () => { if (next != null) { offset = next; load(false); } });
-    window.addEventListener("hub-tab", e => { if (e.detail === "traces") { sync(); load(); } });
+    window.addEventListener("hub-tab", e => { if (e.detail === "traces") { sync(); syncScopeOptions(); load(); } });
     setInterval(() => {
       if (!document.hidden && !busy && $("tab-traces").classList.contains("active")) load(false);
     }, 15000);

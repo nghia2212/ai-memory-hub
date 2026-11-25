@@ -135,6 +135,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script defer src="/execution-map.js"></script>
   <script defer src="/v3-ui.js"></script>
   <script defer src="/v31-ui.js"></script>
+  <script defer src="/v32-ui.js"></script>
 </head>
 <body>
   <header>
@@ -156,6 +157,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button onclick="showTab('agents', this)" >Agent Control Center</button>
     <button id="trace-nav" onclick="showTab('traces', this)">Bản đồ thực thi</button>
     <button id="biz-nav" onclick="showTab('business', this)">Quản lý nghiệp vụ</button>
+    <button id="sk32-nav" onclick="showTab('skills', this)">Kho Skill &amp; Quy tắc</button>
     <button id="conv-nav" onclick="showTab('conversations', this)">Lịch sử hội thoại AI</button>
     <button id="mcp-nav" onclick="showTab('mcp', this)">Kho MCP &amp; Công cụ</button>
     <button onclick="showTab('code', this)" >Codebase Explorer</button>
@@ -471,11 +473,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <div id="trace-filter-card" class="card trace-filter-card">
+        <div class="row-actions" style="margin-bottom:8px;justify-content:space-between">
+          <div id="trace-breadcrumb" class="badge muted">Phạm vi: Toàn dự án</div>
+          <div class="row-actions">
+            <label style="display:inline-flex;align-items:center;gap:6px;margin:0"><input id="trace-descendants" type="checkbox" style="width:auto" /> Gồm task con (descendants)</label>
+            <button id="trace-scope-clear" type="button" class="secondary">Về toàn dự án</button>
+          </div>
+        </div>
         <div class="trace-filters">
           <label>Dự án<select id="trace-proj"></select></label>
           <label>Worktree<select id="trace-wt"></select></label>
+          <label>Plan (Chọn nhanh)<select id="trace-plan-sel"><option value="">Tất cả Plan</option></select></label>
+          <label>Task (Chọn nhanh)<select id="trace-task-sel"><option value="">Tất cả Task</option></select></label>
+          <label>Attempt (Chọn nhanh)<select id="trace-attempt-sel"><option value="">Tất cả Attempt</option></select></label>
           <label>Plan ID<input id="trace-plan"></label>
           <label>Task ID<input id="trace-task"></label>
+          <label>Attempt ID<input id="trace-attempt"></label>
           <label>Session ID<input id="trace-session"></label>
           <label>Agent ID<input id="trace-agent"></label>
           <label>Model ID<input id="trace-model"></label>
@@ -695,6 +708,62 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <h3>Nhật ký Audit Dynamic MCP</h3>
         <div id="mcp-audit-list"></div>
+      </div>
+    </section>
+    <section id="tab-skills" class="panel">
+      <div class="trace-page-head">
+        <h2>Kho Skill &amp; Quy tắc (Centralized Skill Management — V3.2 / SK32)</h2>
+        <button id="sk32-refresh" type="button" class="primary">Làm mới Kho Skill</button>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Tạo Skill mới (Draft → Review → Publish)</h3>
+          <label>Namespace</label>
+          <input id="sk32-new-ns" value="global" placeholder="global / game / architect / developer" />
+          <label>Slug (định danh duy nhất trong namespace)</label>
+          <input id="sk32-new-slug" placeholder="vd: spring-security-audit" />
+          <label>Tiêu đề</label>
+          <input id="sk32-new-title" placeholder="vd: Spring Security Audit Checklist" />
+          <label>Tags (cách nhau dấu phẩy)</label>
+          <input id="sk32-new-tags" placeholder="java, security, review" />
+          <label>Capabilities áp dụng (cách nhau dấu phẩy)</label>
+          <input id="sk32-new-caps" placeholder="java_semantic, security_scan" />
+          <label>Nội dung SKILL.md (Markdown thuần, cấm script/secret)</label>
+          <textarea id="sk32-new-body" rows="5" placeholder="# Quy trình kiểm tra..."></textarea>
+          <button id="sk32-create-btn" type="button" class="primary">Tạo Skill Draft</button>
+        </div>
+        <div class="card">
+          <h3>Xem trước Phân giải Skill (Effective-Skill Preview — 0 LLM)</h3>
+          <label>Dự án</label>
+          <select id="sk32-res-proj"></select>
+          <label>Agent Role (tùy chọn)</label>
+          <input id="sk32-res-role" placeholder="planner / executor / reviewer" />
+          <label>Capabilities cần thiết (cách nhau dấu phẩy)</label>
+          <input id="sk32-res-caps" value="planning, git_read" />
+          <button id="sk32-resolve-btn" type="button" class="primary">Phân giải Skill hiệu lực</button>
+          <div id="sk32-resolve-out" style="margin-top:8px"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>Danh sách Skill (bao gồm 30 Starter Skills ★)</h3>
+        <div class="trace-filters" style="margin-bottom:8px">
+          <label>Namespace<input id="sk32-filter-ns" placeholder="starter-core / starter-game / starter-tech / global"></label>
+          <label>Trạng thái<select id="sk32-filter-life"><option value="active">Active</option><option value="archived">Archived</option><option value="all">Tất cả</option></select></label>
+          <label>Tag<input id="sk32-filter-tag" placeholder="vd: game / java / core"></label>
+          <label>Tìm kiếm (+ Enter)<input id="sk32-filter-q" placeholder="Tìm tiêu đề hoặc slug"></label>
+        </div>
+        <div id="sk32-list">Đăng nhập để tải Kho Skill.</div>
+      </div>
+      <div id="sk32-detail-card" class="card" style="display:none;margin-bottom:16px">
+        <h3 id="sk32-detail-title">Chi tiết Skill</h3>
+        <div id="sk32-detail-body"></div>
+      </div>
+      <div class="card">
+        <div class="trace-page-head">
+          <h3>Đề xuất Skill từ Kinh nghiệm (Experience → Skill Candidates — P7)</h3>
+          <select id="sk32-cand-proj" style="width:260px"></select>
+        </div>
+        <div id="sk32-cand-list">Chọn dự án để xem hàng đợi phê duyệt Skill Candidate.</div>
       </div>
     </section>
   </main>

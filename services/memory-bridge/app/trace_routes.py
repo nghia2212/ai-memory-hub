@@ -39,11 +39,32 @@ def create_trace_router(db, cfg):
         require_any_scope(p,"write","planner","runner","worker")
         return p
 
-    def check_scope(conn, project, worktree=None):
+    def check_scope(conn, project, worktree=None, plan_id=None, task_id=None, attempt_id=None, session_id=None):
         if not conn.execute("SELECT 1 FROM projects WHERE id=?", (project,)).fetchone():
             raise BridgeError(404, "project_not_found", "Project not found")
         if worktree and not conn.execute("SELECT 1 FROM worktrees WHERE id=? AND project_id=?", (worktree, project)).fetchone():
             raise BridgeError(404, "worktree_not_found", "Worktree not found")
+        if plan_id and not conn.execute("SELECT 1 FROM v2_plans WHERE id=? AND project_id=?", (plan_id, project)).fetchone():
+            raise BridgeError(404, "plan_not_found", "Plan not found in project scope")
+        if task_id:
+            trow = conn.execute("SELECT plan_id FROM v2_tasks WHERE id=? AND project_id=?", (task_id, project)).fetchone()
+            if not trow:
+                raise BridgeError(404, "task_not_found", "Task not found in project scope")
+            if plan_id and trow["plan_id"] != plan_id:
+                raise BridgeError(422, "scope_mismatch", "Task does not belong to specified plan")
+        if attempt_id:
+            arow = conn.execute(
+                "SELECT a.task_id, t.plan_id FROM v2_task_attempts a JOIN v2_tasks t ON t.id=a.task_id WHERE a.id=? AND t.project_id=?",
+                (attempt_id, project),
+            ).fetchone()
+            if not arow:
+                raise BridgeError(404, "attempt_not_found", "Attempt not found in project scope")
+            if task_id and arow["task_id"] != task_id:
+                raise BridgeError(422, "scope_mismatch", "Attempt does not belong to specified task")
+            if plan_id and arow["plan_id"] != plan_id:
+                raise BridgeError(422, "scope_mismatch", "Attempt does not belong to specified plan")
+        if session_id and not conn.execute("SELECT 1 FROM v2_sessions WHERE id=? AND project_id=?", (session_id, project)).fetchone():
+            raise BridgeError(404, "session_not_found", "Session not found in project scope")
 
     def decode(row):
         item = dict(row)
@@ -125,15 +146,66 @@ def create_trace_router(db, cfg):
                 conn.execute("INSERT INTO v22_execution_traces ("+",".join(cols)+") VALUES ("+",".join("?" for _ in cols)+")", [data[k] for k in cols])
             return decode(conn.execute("SELECT * FROM v22_execution_traces WHERE trace_id=?", (data["trace_id"],)).fetchone())
 
-    @router.get("")
-    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, task_id: UUID | None=None, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), search: str | None=Query(None,max_length=200), sort: str=Query("time_asc", pattern=r"^(time_asc|time_desc|duration_desc|status)$"), p=Depends(reader)):
+    @router.get("/scope-options")
+    def scope_options(
+        project_id: UUID,
+        plan_id: UUID | None = None,
+        task_id: UUID | None = None,
+        p=Depends(reader),
+    ):
+        """P6A cascading scope options: Project -> Plan -> Task -> Attempt (real IDs, titles, status, timestamps)."""
         project = str(project_id)
-        filters = {"project_id":project,"worktree_id":worktree_id,"session_id":session_id,"plan_id":plan_id,"task_id":task_id,"root_trace_id":root_trace_id,"actor_id":actor_id,"model_id":model_id,"status":status}
+        with db.read_conn() as conn:
+            check_scope(conn, project, plan_id=str(plan_id) if plan_id else None, task_id=str(task_id) if task_id else None)
+            plans = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT id, objective, status, created_at, updated_at FROM v2_plans WHERE project_id=? ORDER BY updated_at DESC LIMIT 100",
+                    (project,),
+                ).fetchall()
+            ]
+            t_sql = "SELECT id, plan_id, task_key, title, state, assigned_agent, created_at, updated_at FROM v2_tasks WHERE project_id=?"
+            t_args = [project]
+            if plan_id:
+                t_sql += " AND plan_id=?"
+                t_args.append(str(plan_id))
+            t_sql += " ORDER BY created_at DESC LIMIT 200"
+            tasks = [dict(r) for r in conn.execute(t_sql, t_args).fetchall()]
+
+            a_sql = "SELECT a.id, a.task_id, t.plan_id, a.attempt_number, a.status, a.started_at, a.ended_at FROM v2_task_attempts a JOIN v2_tasks t ON t.id=a.task_id WHERE t.project_id=?"
+            a_args = [project]
+            if task_id:
+                a_sql += " AND a.task_id=?"
+                a_args.append(str(task_id))
+            elif plan_id:
+                a_sql += " AND t.plan_id=?"
+                a_args.append(str(plan_id))
+            a_sql += " ORDER BY a.started_at DESC LIMIT 200"
+            attempts = [dict(r) for r in conn.execute(a_sql, a_args).fetchall()]
+            return {"project_id": project, "plans": plans, "tasks": tasks, "attempts": attempts}
+
+    @router.get("")
+    def list_traces(project_id: UUID, worktree_id: UUID | None=None, session_id: UUID | None=None, plan_id: UUID | None=None, task_id: UUID | None=None, attempt_id: UUID | None=None, include_descendants: bool=False, root_trace_id: UUID | None=None, actor_id: str | None=None, model_id: str | None=None, status: str | None=None, from_time: datetime | None=None, to_time: datetime | None=None, limit: int=Query(100,ge=1,le=500), offset: int=Query(0,ge=0), search: str | None=Query(None,max_length=200), sort: str=Query("time_asc", pattern=r"^(time_asc|time_desc|duration_desc|status)$"), p=Depends(reader)):
+        project = str(project_id)
+        filters = {"project_id":project,"worktree_id":worktree_id,"session_id":session_id,"plan_id":plan_id,"attempt_id":attempt_id,"root_trace_id":root_trace_id,"actor_id":actor_id,"model_id":model_id,"status":status}
+        if task_id is not None and not include_descendants:
+            filters["task_id"] = task_id
         clauses, args = [], []
         for k,v in filters.items():
             if v is not None:
                 clauses.append(k+"=?")
                 args.append(str(v))
+        if task_id is not None and include_descendants:
+            # Explicit parent-child hierarchy ONLY (never misclassify DAG dependencies!)
+            clauses.append(
+                "(task_id=? OR trace_id IN ("
+                "WITH RECURSIVE desc_t(tid) AS ("
+                "  SELECT trace_id FROM v22_execution_traces WHERE project_id=? AND task_id=? "
+                "  UNION ALL "
+                "  SELECT c.trace_id FROM v22_execution_traces c JOIN desc_t d ON c.parent_trace_id = d.tid WHERE c.project_id=?"
+                ") SELECT tid FROM desc_t))"
+            )
+            args.extend([str(task_id), project, str(task_id), project])
         for value, operator in ((from_time,">="),(to_time,"<=")):
             if value is not None:
                 if value.utcoffset() is None:
@@ -146,7 +218,15 @@ def create_trace_router(db, cfg):
         order = {"time_asc":"started_at,trace_id","time_desc":"started_at DESC,trace_id","duration_desc":"duration_ms IS NULL,duration_ms DESC,trace_id","status":"status,started_at,trace_id"}[sort]
         where = " AND ".join(clauses)
         with db.read_conn() as conn:
-            check_scope(conn,project,str(worktree_id) if worktree_id else None)
+            check_scope(
+                conn,
+                project,
+                str(worktree_id) if worktree_id else None,
+                plan_id=str(plan_id) if plan_id else None,
+                task_id=str(task_id) if task_id else None,
+                attempt_id=str(attempt_id) if attempt_id else None,
+                session_id=str(session_id) if session_id else None,
+            )
             total = conn.execute("SELECT COUNT(*) FROM v22_execution_traces WHERE "+where,args).fetchone()[0]
             rows = conn.execute("SELECT * FROM v22_execution_traces WHERE "+where+" ORDER BY "+order+" LIMIT ? OFFSET ?",args+[limit,offset]).fetchall()
             raw_items = [decode(r) for r in rows]
@@ -168,6 +248,10 @@ def create_trace_router(db, cfg):
             )
             enriched_sample = enrich_trace_items(sample, seq_map, ing_map, tie_ts, dep_edges)
             items = enrich_trace_items(raw_items, seq_map, ing_map, tie_ts, dep_edges)
+            for it in items:
+                if not it.get("task_id") and not it.get("plan_id"):
+                    it["task_link_label"] = "Chưa liên kết nhiệm vụ"
+            unlinked_count = conn.execute("SELECT COUNT(*) FROM v22_execution_traces WHERE project_id=? AND task_id IS NULL AND plan_id IS NULL", (project,)).fetchone()[0]
             groups = build_group_summaries(enriched_sample)
             return {
                 "items": items,
@@ -177,6 +261,15 @@ def create_trace_router(db, cfg):
                 "summary": summary,
                 "groups": groups,
                 "planned_steps": planned_steps,
+                "scope": {
+                    "project_id": project,
+                    "worktree_id": str(worktree_id) if worktree_id else None,
+                    "plan_id": str(plan_id) if plan_id else None,
+                    "task_id": str(task_id) if task_id else None,
+                    "attempt_id": str(attempt_id) if attempt_id else None,
+                    "include_descendants": include_descendants,
+                },
+                "unlinked_project_traces": unlinked_count,
             }
 
     @router.get("/export")
@@ -186,21 +279,43 @@ def create_trace_router(db, cfg):
         session_id: UUID | None = None,
         plan_id: UUID | None = None,
         task_id: UUID | None = None,
+        attempt_id: UUID | None = None,
+        include_descendants: bool = False,
         status: str | None = None,
         fmt: str = Query("json", alias="format", pattern=r"^(json|csv)$"),
         limit: int = Query(500, ge=1, le=2000),
         p=Depends(reader),
     ):
         project = str(project_id)
-        filters = {"project_id": project, "worktree_id": worktree_id, "session_id": session_id, "plan_id": plan_id, "task_id": task_id, "status": status}
+        filters = {"project_id": project, "worktree_id": worktree_id, "session_id": session_id, "plan_id": plan_id, "attempt_id": attempt_id, "status": status}
+        if task_id is not None and not include_descendants:
+            filters["task_id"] = task_id
         clauses, args = [], []
         for k, v in filters.items():
             if v is not None:
                 clauses.append(k + "=?")
                 args.append(str(v))
+        if task_id is not None and include_descendants:
+            clauses.append(
+                "(task_id=? OR trace_id IN ("
+                "WITH RECURSIVE desc_t(tid) AS ("
+                "  SELECT trace_id FROM v22_execution_traces WHERE project_id=? AND task_id=? "
+                "  UNION ALL "
+                "  SELECT c.trace_id FROM v22_execution_traces c JOIN desc_t d ON c.parent_trace_id = d.tid WHERE c.project_id=?"
+                ") SELECT tid FROM desc_t))"
+            )
+            args.extend([str(task_id), project, str(task_id), project])
         where = " AND ".join(clauses)
         with db.read_conn() as conn:
-            check_scope(conn, project, str(worktree_id) if worktree_id else None)
+            check_scope(
+                conn,
+                project,
+                str(worktree_id) if worktree_id else None,
+                plan_id=str(plan_id) if plan_id else None,
+                task_id=str(task_id) if task_id else None,
+                attempt_id=str(attempt_id) if attempt_id else None,
+                session_id=str(session_id) if session_id else None,
+            )
             rows = conn.execute("SELECT * FROM v22_execution_traces WHERE " + where + " ORDER BY started_at,trace_id LIMIT ?", args + [limit]).fetchall()
             raw_items = [decode(r) for r in rows]
             seq_map, ing_map, tie_ts = compute_global_sequence_map(conn, project)
