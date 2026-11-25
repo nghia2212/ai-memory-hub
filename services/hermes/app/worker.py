@@ -91,6 +91,8 @@ class HermesWorker:
 
             project_id = str(event["project_id"])
             worktree_id = str(event.get("worktree_id") or "")
+            task_id = str(event.get("task_id") or "")
+            event_source_agent = str(event.get("source_agent") or "")
             event_id = str(event.get("id") or event.get("event_id") or "unknown")
             event_kind = str(event.get("kind") or "session_end").lower()
             raw_payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
@@ -104,6 +106,7 @@ class HermesWorker:
                 candidate_payload = {
                     "project_id": project_id,
                     "worktree_id": worktree_id or None,
+                    "task_id": task_id or None,
                     "event_id": event_id,
                     "idempotency_key": compute_idempotency_key(project_id, event_id, sanitized),
                     "state": "candidate",
@@ -117,6 +120,7 @@ class HermesWorker:
                         "model": summary.model,
                         "input_tokens": summary.input_tokens,
                         "output_tokens": summary.output_tokens,
+                        "event_source_agent": event_source_agent or None,
                     },
                 }
                 self.bridge.post_candidate_result(candidate_payload)

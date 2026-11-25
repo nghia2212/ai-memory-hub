@@ -87,6 +87,8 @@ class TestHermesWorker(unittest.TestCase):
                 "id": "e4",
                 "project_id": "proj-1",
                 "worktree_id": "wt-1",
+                "task_id": "TASK-99",
+                "source_agent": "codex",
                 "kind": "session_end",
                 "approved": True,
                 "payload": {
@@ -105,6 +107,8 @@ class TestHermesWorker(unittest.TestCase):
         self.assertEqual(len(bridge.posted), 1)
         posted = bridge.posted[0]
         self.assertEqual(posted["state"], "candidate")
+        self.assertEqual(posted["task_id"], "TASK-99")
+        self.assertEqual(posted["provenance"]["event_source_agent"], "codex")
         self.assertTrue(posted["idempotency_key"].startswith("hermes:proj-1:e4:"))
 
     def test_budget_cap_stops_excess_events(self) -> None:

@@ -58,7 +58,20 @@ Result: **8/8 PASS (`16.439s`)**:
 - Per `AGENT-BOARD.md`, Agent C does not edit `services/memory-bridge/**` or `services/dashboard/**`.
 - Added [integrations/common/AGENT-STATUS-PROPOSAL.md](file:///D:/workspace1/ai-memory-hub-agent-c/integrations/common/AGENT-STATUS-PROPOSAL.md) defining `GET /v1/agents/status` and Dashboard **Connected AI Agents** panel consuming standardized `source_agent` (`claude`, `gemini`, `codex`, `hermes`) and `task_id` events.
 
-## 4. Blockers & Untested Items
+## 4. V2 Readiness & Host CLI Discovery (Preparation Only)
+
+- **V2 Activation Gate (`docs/V2-AGENT-BOARD.md` on `origin/lead/v1-integration@c1c3036`):**
+  - Status is **QUEUED**; `lead/v2-orchestrator` does not exist yet (pending V1 PR #4/#3/#2 review/integration, Docker daemon resolution, and frozen V2 contracts).
+  - Per Lead's rule, Agent C has **not** created `agent/v2-orchestration` prematurely.
+- **V1/V1.1 Hardening Applied on `agent/v1-hermes-integrations`:**
+  - Added graceful `SIGINT`/`SIGTERM` shutdown in `services/hermes/app/server.py`.
+  - Preserved `task_id` and `provenance.event_source_agent` in `services/hermes/app/worker.py`.
+- **Verified Host CLI Non-Interactive & Telemetry Interfaces (read-only `--help` checks, zero paid calls):**
+  - `claude` (`2.1.269`): `-p/--print`, `--output-format <text|json|stream-json>`, `--model <model>`, `--fallback-model <model>`, `--effort <low|medium|high|xhigh|max>`, `--max-budget-usd <amount>`, `--session-id <uuid>`, `--permission-mode <mode>`.
+  - `codex` (`codex-cli 0.166.0`): `codex exec --json -m <model> -s <read-only|workspace-write> -C <DIR> --output-schema <FILE> -o <FILE> --ephemeral`. No CLI flag exposes remaining subscription quota (remains `unavailable` / `'Không có dữ liệu'`).
+  - `gemini`: Not installed on host.
+
+## 5. Blockers & Untested Items
 
 1. **Docker Desktop daemon not running:** `docker compose --profile hermes build hermes` failed to connect to `npipe:////./pipe/dockerDesktopLinuxEngine`.
 2. **Live Memory Bridge & Codebase MCP:** Mocked in tests pending Lead integration of Agent A & Agent B branches.

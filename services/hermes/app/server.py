@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import threading
 import time
 from dataclasses import asdict
@@ -119,6 +120,19 @@ def run_server() -> None:
         t.start()
 
     server = ThreadingHTTPServer(("0.0.0.0", config.port), make_handler(state))
+
+    def _handle_signal(_signum: int, _frame: Any) -> None:
+        stop_event.set()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    for sig_name in ("SIGINT", "SIGTERM"):
+        sig = getattr(signal, sig_name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _handle_signal)
+            except ValueError:
+                pass
+
     try:
         server.serve_forever()
     finally:
