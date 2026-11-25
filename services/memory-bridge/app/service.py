@@ -78,7 +78,7 @@ def _enforce_serialized_budget(
     return build_envelope(current_items, True)
 
 
-from .trace_operations import observe_operation
+from .trace_operations import observe_operation, trace_parent
 
 
 class MemoryBridgeService:
@@ -1009,7 +1009,10 @@ class MemoryBridgeService:
             if admin
             else (self.settings.codebase_read_token or self.settings.codebase_token)
         )
-        return {"Authorization": f"Bearer {token}"} if token else {}
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        if trace_parent.get():
+            headers["X-Trace-Parent"] = trace_parent.get()
+        return headers
 
     def _sync_index_job_row(self, job_data: dict[str, Any]) -> None:
         job_id = str(job_data.get("job_id") or "")
