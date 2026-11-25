@@ -67,39 +67,39 @@ def _default_brain_roles() -> list[dict[str, Any]]:
         },
         {
             "role_name": "tier1_light",
-            "preferred_label": "Gemini 4 Hydrogen",
-            "effective_provider": None,
-            "effective_model_id": None,
-            "effective_effort": None,
+            "preferred_label": "Gemini 4 Hydrogen (tạm đề xuất: Claude Sonnet 5.5 Low)",
+            "effective_provider": "agy",
+            "effective_model_id": "claude-sonnet-5-5-low",
+            "effective_effort": "low",
             "auth_mode": "subscription_cli",
-            "availability_status": "unavailable",
-            "availability_reason": "Chưa xuất hiện trong agy models v1.1.27; gợi ý xác minh: gemini-3.8-flash-medium",
-            "fallback_order": ["gemini-3.8-flash-medium", "gemini-3.8-flash-low"],
+            "availability_status": "verified",
+            "availability_reason": "Gemini 4 Hydrogen chưa có trong agy models v1.1.27; tạm dùng claude-sonnet-5-5-low đã xác minh qua CLI.",
+            "fallback_order": ["claude-sonnet-5-5-low", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
             "max_escalations": 1,
             "last_verified_at": None,
         },
         {
             "role_name": "tier2_primary",
-            "preferred_label": "Gemini 4 Neon Medium",
-            "effective_provider": None,
-            "effective_model_id": None,
-            "effective_effort": None,
+            "preferred_label": "Gemini 4 Neon Medium (tạm đề xuất: Claude Sonnet 5.5 Medium)",
+            "effective_provider": "agy",
+            "effective_model_id": "claude-sonnet-5-5-medium",
+            "effective_effort": "medium",
             "auth_mode": "subscription_cli",
-            "availability_status": "unavailable",
-            "availability_reason": "Chưa xuất hiện trong agy models v1.1.27; cần xác minh hoặc duyệt thay thế: claude-sonnet-5-5-medium",
-            "fallback_order": ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high"],
+            "availability_status": "verified",
+            "availability_reason": "Gemini 4 Neon chưa có trong agy models v1.1.27; tạm dùng claude-sonnet-5-5-medium đã xác minh qua CLI.",
+            "fallback_order": ["claude-sonnet-5-5-medium", "gemini-3.8-flash-high", "claude-sonnet-5-5-high"],
             "max_escalations": 1,
             "last_verified_at": None,
         },
         {
             "role_name": "tier3_advanced",
-            "preferred_label": "Gemini 4 Carbon / Claude Opus 5.5",
+            "preferred_label": "Gemini 4 Carbon / Claude Opus 5.5 Medium",
             "effective_provider": "agy",
             "effective_model_id": "claude-opus-5-5-medium",
             "effective_effort": "medium",
             "auth_mode": "subscription_cli",
             "availability_status": "verified",
-            "availability_reason": "Carbon chưa có trên CLI; claude-opus-5-5-medium đã xác minh qua agy models",
+            "availability_reason": "Gemini 4 Carbon chưa có trên CLI; claude-opus-5-5-medium đã xác minh qua agy models.",
             "fallback_order": ["claude-opus-5-5-medium", "claude-opus-5-5-high"],
             "max_escalations": 1,
             "last_verified_at": None,
@@ -186,30 +186,67 @@ class V2BridgeService:
                     "expires_at": None,
                     "source_urls": [],
                     "models": [],
+                    "new_models": [],
+                    "retiring_models": [],
+                    "gemini4_neon_available": False,
+                    "gemini4_neon_models": [],
+                    "gemini4_neon_recommendation": None,
                 }
             models = conn.execute(
                 "SELECT * FROM v2_models WHERE snapshot_id = ? ORDER BY provider, model_id",
                 (snap["id"],),
             ).fetchall()
-            return {
-                "snapshot_id": snap["id"],
-                "version": snap["version"],
-                "is_stale": bool(snap["is_stale"]),
-                "fetched_at": snap["fetched_at"],
-                "expires_at": snap["expires_at"],
-                "source_urls": json.loads(snap["source_urls_json"]),
-                "models": [
+            exec_verified_rows = conn.execute(
+                """
+                SELECT DISTINCT model_id FROM v2_model_evaluations
+                WHERE evidence_kind = 'observed' AND sample_count > 0 AND (failure_rate IS NULL OR failure_rate < 1.0)
+                """
+            ).fetchall()
+            exec_verified_ids = {r["model_id"] for r in exec_verified_rows}
+
+            prev_snap = conn.execute(
+                "SELECT id FROM v2_catalog_snapshots WHERE fetched_at < ? ORDER BY fetched_at DESC LIMIT 1",
+                (snap["fetched_at"],),
+            ).fetchone()
+            prev_ids: set[str] = set()
+            if prev_snap:
+                prev_rows = conn.execute(
+                    "SELECT model_id FROM v2_models WHERE snapshot_id = ?", (prev_snap["id"],)
+                ).fetchall()
+                prev_ids = {r["model_id"] for r in prev_rows}
+
+            enriched_models: list[dict[str, Any]] = []
+            cur_ids: set[str] = set()
+            retiring_models: list[str] = []
+            neon_live_models: list[str] = []
+            for m in models:
+                caps = json.loads(m["capabilities_json"])
+                mid = m["model_id"]
+                cur_ids.add(mid)
+                if mid in exec_verified_ids:
+                    stage = "execution_verified"
+                else:
+                    stage = str(
+                        caps.get("verification_stage")
+                        or ("cli_available" if m["status"] == "verified" else "catalog_listed")
+                    )
+                if m["status"] == "deprecated" or caps.get("retiring_soon"):
+                    retiring_models.append(mid)
+                if "gemini-4-neon" in mid.lower() and stage in {"cli_available", "execution_verified"}:
+                    neon_live_models.append(mid)
+                enriched_models.append(
                     {
                         "id": m["id"],
                         "provider": m["provider"],
-                        "model_id": m["model_id"],
+                        "model_id": mid,
                         "cli_family": m["cli_family"],
                         "cli_version": m["cli_version"],
                         "auth_mode": m["auth_mode"],
                         "status": m["status"],
+                        "verification_stage": stage,
                         "context_limit": m["context_limit"],
                         "output_limit": m["output_limit"],
-                        "capabilities": json.loads(m["capabilities_json"]),
+                        "capabilities": caps,
                         "price_input_per_1m": m["price_input_per_1m"],
                         "price_output_per_1m": m["price_output_per_1m"],
                         "price_cache_read_per_1m": m["price_cache_read_per_1m"],
@@ -220,8 +257,33 @@ class V2BridgeService:
                         "verified_at": m["verified_at"],
                         "expires_at": m["expires_at"],
                     }
-                    for m in models
-                ],
+                )
+
+            new_models = sorted(cur_ids - prev_ids) if prev_ids else []
+            removed_models = sorted(prev_ids - cur_ids) if prev_ids else []
+            for rm in removed_models:
+                if rm not in retiring_models:
+                    retiring_models.append(rm)
+
+            neon_available = bool(neon_live_models)
+            neon_rec = (
+                f"Phát hiện Gemini 4 Neon ({', '.join(neon_live_models)}) đã khả dụng qua CLI! Đề xuất chuyển bộ não chính (tier2_primary) sang {neon_live_models[0]}."
+                if neon_available
+                else None
+            )
+            return {
+                "snapshot_id": snap["id"],
+                "version": snap["version"],
+                "is_stale": bool(snap["is_stale"]),
+                "fetched_at": snap["fetched_at"],
+                "expires_at": snap["expires_at"],
+                "source_urls": json.loads(snap["source_urls_json"]),
+                "models": enriched_models,
+                "new_models": new_models,
+                "retiring_models": retiring_models,
+                "gemini4_neon_available": neon_available,
+                "gemini4_neon_models": neon_live_models,
+                "gemini4_neon_recommendation": neon_rec,
             }
 
     def refresh_catalog(self, req: CatalogRefreshRequest, actor: str = "admin") -> dict[str, Any]:

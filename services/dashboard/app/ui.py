@@ -317,27 +317,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 7b. Bộ não điều phối (V2 Adaptive AI Brain) -->
     <section id="tab-brain" class="panel">
+      <div id="neon-banner" class="card" style="display:none;margin-bottom:16px;border-color:var(--ok)"></div>
       <div class="card" style="margin-bottom:16px">
-        <h2>Bộ não điều phối (Adaptive AI Brain)</h2>
-        <p style="color:var(--muted)">Phân tách rõ <strong>ưu tiên cấu hình</strong> và <strong>model hiệu lực đã xác minh qua CLI/API</strong>. Mặc định yêu cầu phê duyệt thủ công (<code>REVIEW_REQUIRED</code>), không tự động fallback sang API trả phí.</p>
+        <h2>Bộ não điều phối (Adaptive AI Brain — Cấu hình trực tiếp theo Project)</h2>
+        <p style="color:var(--muted)">Chọn trực tiếp <strong>Provider/CLI, Model, Effort và thứ tự Fallback</strong> cho từng tầng ngay trên Dashboard (lưu theo Project, không cần sửa source/redeploy). Mặc định yêu cầu phê duyệt (<code>REVIEW_REQUIRED</code>), không tự động dùng API trả phí.</p>
         <div class="row-actions">
           <select id="brain-proj" style="max-width:320px" onchange="loadBrainPanel()"></select>
-          <button class="secondary" onclick="loadBrainPanel()">Làm mới cấu hình bộ não</button>
+          <button class="secondary" onclick="loadBrainPanel()">Làm mới</button>
+          <button class="secondary" onclick="syncCatalog()">Quét lại CLI &amp; Model (agy/claude/codex)</button>
+          <button class="primary" style="margin-top:0" onclick="saveBrainPolicy()">Lưu cấu hình Bộ não (theo Project)</button>
         </div>
-        <div id="brain-roles-view" style="margin-top:12px">Chọn dự án để xem phân cấp bộ não điều phối.</div>
+        <datalist id="catalog-model-options"></datalist>
+        <div id="brain-roles-view" style="margin-top:12px">Chọn dự án để cấu hình phân cấp bộ não điều phối.</div>
+        <pre id="brain-probe-output" style="display:none;margin-top:10px"></pre>
       </div>
       <div class="grid">
         <div class="card">
-          <h3>Cập nhật chính sách điều phối (Quản trị)</h3>
+          <h3>Chính sách điều phối &amp; Ngân sách (Quản trị)</h3>
           <label>Chế độ phê duyệt</label>
           <select id="brain-approval-mode">
             <option value="REVIEW_REQUIRED">Phê duyệt thủ công (REVIEW_REQUIRED — Mặc định)</option>
             <option value="AUTO_SCOPED">Tự động có giới hạn (AUTO_SCOPED)</option>
           </select>
-          <label>Ngân sách điều phối hàng ngày (USD, để trống nếu không giới hạn API)</label>
+          <label>Ngân sách điều phối hàng ngày (USD, để trống nếu chỉ dùng CLI gói)</label>
           <input id="brain-planner-budget" type="number" step="0.01" min="0" placeholder="Ví dụ: 2.00" />
           <label><input id="brain-paid-fallback" type="checkbox" style="width:auto" /> Cho phép fallback sang API trả phí (DeepSeek — Tắt mặc định)</label>
-          <button class="primary" onclick="saveBrainPolicy()">Lưu cấu hình bộ não</button>
+          <button class="primary" onclick="saveBrainPolicy()">Lưu chính sách &amp; Bộ não</button>
         </div>
         <div class="card">
           <h3>Thống kê riêng Token Điều phối (Planner) vs Thực thi (Executor)</h3>
@@ -348,13 +353,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- 7b. Kế hoạch & Duyệt DAG (V2) -->
     <section id="tab-plans" class="panel">
-      <div class="card">
-        <h2>Kế hoạch Điều phối & Phê duyệt DAG (V2)</h2>
-        <div class="row-actions">
-          <select id="plans-proj" style="max-width:320px" onchange="loadPlans()"></select>
-          <button class="secondary" onclick="loadPlans()">Tải kế hoạch</button>
+      <div class="card" style="margin-bottom:16px">
+        <h2>Tạo kế hoạch từ Prompt (Phân tích &amp; Chọn model tự động)</h2>
+        <div class="grid">
+          <div><label>Dự án</label><select id="plans-proj" onchange="syncWorktrees('plans-proj','plans-wt'); loadPlans()"></select></div>
+          <div><label>Worktree</label><select id="plans-wt"></select></div>
+          <div>
+            <label>Độ phức tạp (để Tự động hoặc chọn)</label>
+            <select id="plan-complexity">
+              <option value="">Tự động phân loại</option>
+              <option value="XS">XS (tier1_light)</option>
+              <option value="S">S (tier1_light)</option>
+              <option value="M">M (tier2_primary)</option>
+              <option value="L">L (tier3_advanced)</option>
+              <option value="XL">XL (tier3_advanced)</option>
+            </select>
+          </div>
         </div>
+        <label>Prompt / Mục tiêu nhiệm vụ</label>
+        <textarea id="plan-objective" rows="2" placeholder="Ví dụ: Kiểm tra nhanh trạng thái kiến trúc module nhân vật và tóm tắt rủi ro"></textarea>
+        <div class="row-actions" style="margin-top:8px">
+          <button class="primary" style="margin-top:0" onclick="analyzeAndCreatePlan()">Phân tích &amp; Tạo kế hoạch (Chờ duyệt)</button>
+          <button class="secondary" onclick="loadPlans()">Tải danh sách kế hoạch</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Kế hoạch Điều phối, Phê duyệt &amp; Khởi chạy Agent (V2)</h2>
         <div id="plans-list" style="margin-top:12px">Chọn dự án để xem danh sách kế hoạch và trạng thái duyệt.</div>
+        <pre id="plan-dispatch-output" style="display:none;margin-top:10px"></pre>
       </div>
     </section>
 
@@ -385,8 +411,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- 7d. Danh mục Model & Đánh giá (V2) -->
     <section id="tab-catalog" class="panel">
       <div class="card">
-        <h2>Danh mục Model & Độ phù hợp (Catalog & Suitability Matrix)</h2>
-        <button class="secondary" onclick="loadCatalog()">Làm mới danh mục</button>
+        <h2>Danh mục Model &amp; Trạng thái Xác minh (Catalog / CLI / Thực thi)</h2>
+        <div class="row-actions">
+          <button class="primary" style="margin-top:0" onclick="syncCatalog()">Quét lại CLI &amp; Cập nhật Danh mục</button>
+          <button class="secondary" onclick="loadCatalog()">Làm mới danh mục</button>
+        </div>
+        <div id="catalog-alerts" style="margin-top:10px"></div>
         <div id="catalog-view" style="margin-top:12px"></div>
       </div>
     </section>
@@ -520,7 +550,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         cards.innerHTML =
           renderCard("Memory Bridge", status.bridge) +
           renderCard("Codebase Adapter", status.codebase) +
-          renderCard("Hermes Worker", status.hermes);
+          renderCard("Hermes Worker", status.hermes) +
+          renderCard("Host Brain Agent", status.host_brain);
         document.getElementById("overview-summary").innerHTML = `<pre>${JSON.stringify(status, null, 2)}</pre>`;
       } catch (e) {
         toast("Lỗi tải trạng thái: " + e.message);
@@ -614,6 +645,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         syncWorktrees("code-proj", "code-wt");
         syncWorktrees("mem-proj", "mem-wt");
         syncWorktrees("ho-proj", "ho-wt");
+        syncWorktrees("plans-proj", "plans-wt");
       } catch (e) {
         toast("Lỗi tải dự án: " + e.message);
       }
@@ -785,6 +817,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } catch (e) { toast("Lỗi khôi phục: " + e.message); }
     }
 
+    let brainRolesCache = [];
+    let catalogCache = null;
+
+    function verificationStageBadge(stage) {
+      if (stage === "execution_verified") return `<span class="badge ok">Đã thực thi thành công</span>`;
+      if (stage === "cli_available") return `<span class="badge ok">Khả dụng qua CLI</span>`;
+      if (stage === "catalog_listed") return `<span class="badge warn">Xuất hiện trong Catalog</span>`;
+      return `<span class="badge muted">Chưa khả dụng</span>`;
+    }
+
     async function loadBrainPanel() {
       const pid = document.getElementById("brain-proj").value;
       if (!pid) {
@@ -792,25 +834,69 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
       try {
-        const [cfg, usage] = await Promise.all([
+        const [cfg, usage, cat] = await Promise.all([
           apiFetch(`/api/v2/brain/config?project_id=${encodeURIComponent(pid)}`),
-          apiFetch(`/api/v2/usage?project_id=${encodeURIComponent(pid)}`)
+          apiFetch(`/api/v2/usage?project_id=${encodeURIComponent(pid)}`),
+          apiFetch("/api/v2/catalog")
         ]);
+        catalogCache = cat;
+        brainRolesCache = cfg.roles || [];
+
+        const dl = document.getElementById("catalog-model-options");
+        dl.innerHTML = (cat.models || []).map(m => `<option value="${m.model_id}">${m.provider} | ${m.verification_stage || m.status}</option>`).join("");
+
+        const banner = document.getElementById("neon-banner");
+        if (cat.gemini4_neon_available && (cat.gemini4_neon_models || []).length) {
+          const neonId = cat.gemini4_neon_models[0];
+          banner.style.display = "block";
+          banner.innerHTML = `<strong>${cat.gemini4_neon_recommendation}</strong> <button class="primary" style="margin:0 0 0 10px" onclick="switchToGemini4Neon('${neonId}')">Chuyển bộ não chính sang ${neonId}</button>`;
+        } else {
+          banner.style.display = "none";
+        }
+
         document.getElementById("brain-approval-mode").value = cfg.approval_mode || "REVIEW_REQUIRED";
         document.getElementById("brain-planner-budget").value = cfg.daily_planner_budget_usd ?? "";
         document.getElementById("brain-paid-fallback").checked = Boolean(cfg.allow_paid_api_fallback);
-        const rows = (cfg.roles || []).map(r => {
-          const badgeCls = r.availability_status === "verified" ? "ok" : (r.availability_status === "unavailable" ? "err" : "warn");
+
+        const stageByModel = {};
+        for (const m of (cat.models || [])) stageByModel[m.model_id] = m.verification_stage || m.status;
+
+        const rows = brainRolesCache.map((r, idx) => {
+          const prov = r.effective_provider || "agy";
+          const mid = r.effective_model_id || "";
+          const eff = r.effective_effort || "";
+          const fb = (r.fallback_order || []).join(", ");
+          const stage = prov === "local" ? "execution_verified" : (stageByModel[mid] || (r.availability_status === "verified" ? "cli_available" : "unavailable"));
           return `<tr>
-            <td><code>${r.role_name}</code></td>
-            <td>${r.preferred_label || "Không có dữ liệu"}</td>
-            <td>${r.effective_model_id ? `<code>${r.effective_provider || ""}/${r.effective_model_id}</code>` : "<span class='badge warn'>Chưa có model hiệu lực</span>"}</td>
-            <td><span class="badge ${badgeCls}">${r.availability_status}</span><br/><small style="color:var(--muted)">${r.availability_reason || ""}</small></td>
-            <td>${(r.fallback_order || []).join(" → ") || "Không có"}</td>
+            <td><code>${r.role_name}</code><br/><small style="color:var(--muted)">${r.preferred_label || ""}</small></td>
+            <td>
+              <select id="br-prov-${idx}" style="min-width:95px">
+                <option value="agy" ${prov==="agy"?"selected":""}>agy (CLI)</option>
+                <option value="claude" ${prov==="claude"?"selected":""}>claude (CLI)</option>
+                <option value="codex" ${prov==="codex"?"selected":""}>codex (CLI)</option>
+                <option value="local" ${prov==="local"?"selected":""}>local (0 LLM)</option>
+                <option value="deepseek" ${prov==="deepseek"?"selected":""}>deepseek (API)</option>
+              </select>
+            </td>
+            <td><input id="br-model-${idx}" list="catalog-model-options" value="${mid}" placeholder="Ví dụ: claude-sonnet-5-5-medium" /></td>
+            <td>
+              <select id="br-eff-${idx}" style="min-width:85px">
+                <option value="" ${!eff?"selected":""}>Mặc định</option>
+                <option value="low" ${eff==="low"?"selected":""}>low</option>
+                <option value="medium" ${eff==="medium"?"selected":""}>medium</option>
+                <option value="high" ${eff==="high"?"selected":""}>high</option>
+              </select>
+            </td>
+            <td><input id="br-fb-${idx}" value="${fb}" placeholder="model1, model2" /></td>
+            <td>${verificationStageBadge(stage)}<br/><small style="color:var(--muted)">${r.availability_reason || ""}</small></td>
+            <td class="row-actions">
+              <button class="secondary" onclick="probeRoleModel(${idx}, 'connection_check')">Kiểm tra kết nối</button>
+              <button class="secondary" onclick="probeRoleModel(${idx}, 'trial_run')">Chạy thử (Cần duyệt)</button>
+            </td>
           </tr>`;
         }).join("");
         document.getElementById("brain-roles-view").innerHTML =
-          `<table><tr><th>Vai trò</th><th>Ưu tiên cấu hình</th><th>Model hiệu lực</th><th>Khả dụng & Lý do</th><th>Dự phòng</th></tr>${rows}</table>`;
+          `<table><tr><th>Vai trò</th><th>Provider / CLI</th><th>Model ID</th><th>Effort</th><th>Thứ tự Fallback</th><th>Xác minh</th><th>Kiểm thử</th></tr>${rows}</table>`;
 
         const fmt = (v) => (v === null || v === undefined ? "Không có dữ liệu" : String(v));
         const p = usage.planner || {};
@@ -826,10 +912,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } catch (e) { toast("Lỗi tải Bộ não điều phối: " + e.message); }
     }
 
+    function collectBrainRolesFromUI() {
+      return brainRolesCache.map((r, idx) => {
+        const prov = document.getElementById(`br-prov-${idx}`)?.value || r.effective_provider || "agy";
+        const mid = (document.getElementById(`br-model-${idx}`)?.value || "").trim() || null;
+        const eff = document.getElementById(`br-eff-${idx}`)?.value || null;
+        const fbRaw = (document.getElementById(`br-fb-${idx}`)?.value || "").trim();
+        const fb = fbRaw ? fbRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+        const authMode = prov === "deepseek" ? "api_key" : (prov === "local" ? "unknown" : "subscription_cli");
+        return {
+          role_name: r.role_name,
+          preferred_label: r.preferred_label || r.role_name,
+          effective_provider: prov,
+          effective_model_id: mid,
+          effective_effort: eff,
+          auth_mode: authMode,
+          availability_status: mid ? "verified" : "unverified",
+          availability_reason: r.availability_reason || "Cấu hình trực tiếp bởi quản trị trên Dashboard",
+          fallback_order: fb,
+          max_escalations: r.max_escalations ?? 1,
+          last_verified_at: r.last_verified_at || null
+        };
+      });
+    }
+
     async function saveBrainPolicy() {
       const pid = document.getElementById("brain-proj").value;
       if (!pid) { toast("Vui lòng chọn dự án"); return; }
       const rawBudget = document.getElementById("brain-planner-budget").value;
+      const allowPaid = document.getElementById("brain-paid-fallback").checked;
       try {
         await apiFetch("/api/v2/brain/config", {
           method: "PUT",
@@ -837,12 +948,70 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             project_id: pid,
             approval_mode: document.getElementById("brain-approval-mode").value,
             daily_planner_budget_usd: rawBudget === "" ? null : Number(rawBudget),
-            allow_paid_api_fallback: document.getElementById("brain-paid-fallback").checked
+            allow_paid_api_fallback: allowPaid,
+            allowed_auth_modes: allowPaid ? ["subscription_cli", "api_key"] : ["subscription_cli"],
+            roles: collectBrainRolesFromUI()
           })
         });
-        toast("Đã lưu cấu hình Bộ não điều phối");
+        toast("Đã lưu cấu hình Bộ não điều phối cho dự án");
         await loadBrainPanel();
-      } catch (e) { toast("Lỗi lưu cấu hình: " + e.message); }
+      } catch (e) { toast("Lỗi lưu cấu hình (cần đăng nhập quản trị): " + e.message); }
+    }
+
+    async function switchToGemini4Neon(neonModelId) {
+      const idx = brainRolesCache.findIndex(r => r.role_name === "tier2_primary");
+      if (idx >= 0) {
+        document.getElementById(`br-prov-${idx}`).value = "agy";
+        document.getElementById(`br-model-${idx}`).value = neonModelId;
+        document.getElementById(`br-eff-${idx}`).value = "medium";
+        await saveBrainPolicy();
+      }
+    }
+
+    async function probeRoleModel(idx, mode) {
+      const pid = document.getElementById("brain-proj").value;
+      const prov = document.getElementById(`br-prov-${idx}`).value;
+      const mid = document.getElementById(`br-model-${idx}`).value.trim();
+      const allowPaid = document.getElementById("brain-paid-fallback").checked;
+      if (!mid) { toast("Vui lòng nhập Model ID trước khi kiểm tra"); return; }
+      if (mode === "trial_run") {
+        const ok = window.confirm(`Xác nhận phê duyệt chạy thử model '${mid}' qua CLI '${prov}'? (Sẽ gửi 1 prompt ngắn kiểm tra phản hồi thực tế.)`);
+        if (!ok) return;
+      }
+      const outEl = document.getElementById("brain-probe-output");
+      outEl.style.display = "block";
+      outEl.textContent = mode === "trial_run" ? `Đang chạy thử ${prov}/${mid}...` : `Đang kiểm tra kết nối ${prov}/${mid}...`;
+      try {
+        const res = await apiFetch("/api/v2/brain/probe", {
+          method: "POST",
+          body: JSON.stringify({
+            project_id: pid,
+            provider: prov,
+            cli_family: prov,
+            model_id: mid,
+            mode: mode,
+            user_approved: mode === "trial_run",
+            allow_paid_api: allowPaid
+          })
+        });
+        outEl.textContent = JSON.stringify(res, null, 2);
+        toast(res.message || "Hoàn tất kiểm tra");
+        if (mode === "trial_run" && res.ok) {
+          await Promise.all([loadBrainPanel(), loadCatalog()]);
+        }
+      } catch (e) {
+        outEl.textContent = "Lỗi: " + e.message;
+        toast("Lỗi kiểm tra model: " + e.message);
+      }
+    }
+
+    async function syncCatalog() {
+      try {
+        toast("Đang quét CLI trên host (agy/claude/codex)...");
+        const res = await apiFetch("/api/v2/catalog/sync", { method: "POST", body: JSON.stringify({}) });
+        toast("Đã cập nhật danh mục model từ host CLI");
+        await Promise.all([loadCatalog(), loadBrainPanel(), loadOverview()]);
+      } catch (e) { toast("Lỗi đồng bộ danh mục (cần đăng nhập quản trị & Host Brain Agent): " + e.message); }
     }
 
     async function loadMetrics() {
@@ -859,6 +1028,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } catch (e) { toast(e.message); }
     }
 
+    async function analyzeAndCreatePlan() {
+      const pid = document.getElementById("plans-proj").value;
+      const wid = document.getElementById("plans-wt").value;
+      const obj = document.getElementById("plan-objective").value.trim();
+      const comp = document.getElementById("plan-complexity").value || null;
+      if (!pid || !wid || !obj) { toast("Vui lòng chọn dự án, worktree và nhập Prompt"); return; }
+      try {
+        const res = await apiFetch("/api/v2/plans/analyze", {
+          method: "POST",
+          body: JSON.stringify({ project_id: pid, worktree_id: wid, objective: obj, complexity: comp })
+        });
+        document.getElementById("plan-objective").value = "";
+        toast("Đã phân tích & tạo kế hoạch chờ phê duyệt (REVIEW_REQUIRED)");
+        await loadPlans();
+      } catch (e) { toast("Lỗi tạo kế hoạch: " + e.message); }
+    }
+
     async function loadPlans() {
       const pid = document.getElementById("plans-proj").value;
       if (!pid) return;
@@ -869,23 +1055,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           document.getElementById("plans-list").innerHTML = `<p style="color:var(--muted)">Chưa có kế hoạch V2 nào cho dự án này.</p>`;
           return;
         }
-        let html = "<table><tr><th>Mục tiêu</th><th>Trạng thái</th><th>Revision</th><th>Hành động</th></tr>";
+        let html = "<table><tr><th>Mục tiêu &amp; Model chọn</th><th>Trạng thái</th><th>Revision</th><th>Hành động</th></tr>";
         for (const p of items) {
           const detail = await apiFetch(`/api/v2/plans/${p.id}?project_id=${encodeURIComponent(pid)}`);
           const curRev = (detail.revisions || [])[0];
           const revHash = curRev ? curRev.revision_hash : "";
+          const firstTask = (detail.tasks || [])[0];
+          const modelInfo = firstTask ? `<code>${firstTask.assigned_provider}/${firstTask.assigned_model_id}</code>` : "";
           const approveBtn = p.status === "REVIEW_REQUIRED" && curRev
             ? `<button class="primary" style="margin:0" onclick="planAction('${p.id}','approve','${curRev.id}','${revHash}')">Phê duyệt</button>`
+            : "";
+          const dispatchBtn = p.status === "APPROVED"
+            ? `<button class="primary" style="margin:0" onclick="dispatchPlan('${p.id}','${p.worktree_id}')">Khởi chạy Agent</button>`
             : "";
           const pauseBtn = p.status === "RUNNING" ? `<button class="secondary" onclick="planAction('${p.id}','pause')">Tạm dừng</button>` : "";
           const resumeBtn = p.status === "PAUSED" ? `<button class="secondary" onclick="planAction('${p.id}','resume')">Tiếp tục</button>` : "";
           const cancelBtn = !["COMPLETED","CANCELLED","REJECTED"].includes(p.status)
             ? `<button class="secondary" onclick="planAction('${p.id}','cancel')">Hủy</button>` : "";
-          html += `<tr><td><strong>${p.objective}</strong><br/><small>${(detail.tasks||[]).length} tác vụ</small></td><td><span class="badge">${p.status}</span></td><td><code>${(p.current_revision_id||"").slice(0,8)}</code></td><td class="row-actions">${approveBtn}${pauseBtn}${resumeBtn}${cancelBtn}</td></tr>`;
+          html += `<tr><td><strong>${p.objective}</strong><br/><small>${(detail.tasks||[]).length} tác vụ · ${modelInfo}</small></td><td><span class="badge">${p.status}</span></td><td><code>${(p.current_revision_id||"").slice(0,8)}</code></td><td class="row-actions">${approveBtn}${dispatchBtn}${pauseBtn}${resumeBtn}${cancelBtn}</td></tr>`;
         }
         html += "</table>";
         document.getElementById("plans-list").innerHTML = html;
       } catch (e) { toast(e.message); }
+    }
+
+    async function dispatchPlan(planId, worktreeId) {
+      const pid = document.getElementById("plans-proj").value;
+      const outEl = document.getElementById("plan-dispatch-output");
+      outEl.style.display = "block";
+      outEl.textContent = "Đang khởi chạy Agent trên Host Brain Agent...";
+      try {
+        const res = await apiFetch(`/api/v2/plans/${planId}/dispatch?project_id=${encodeURIComponent(pid)}`, {
+          method: "POST",
+          body: JSON.stringify({ worktree_id: worktreeId })
+        });
+        outEl.textContent = JSON.stringify(res, null, 2);
+        toast(res.ok ? "Agent thực thi hoàn tất!" : "Agent thực thi thất bại");
+        await Promise.all([loadPlans(), loadSessions(), loadCatalog()]);
+      } catch (e) {
+        outEl.textContent = "Lỗi: " + e.message;
+        toast("Lỗi khởi chạy Agent: " + e.message);
+      }
     }
 
     async function planAction(planId, action, revId, revHash) {
@@ -939,13 +1149,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     async function loadCatalog() {
       try {
-        const [cat, ev] = await Promise.all([apiFetch("/api/v2/catalog"), apiFetch("/api/v2/evaluations")]);
+        const cat = await apiFetch("/api/v2/catalog");
+        const alerts = [];
+        if (cat.gemini4_neon_available) {
+          alerts.push(`<span class="badge ok">${cat.gemini4_neon_recommendation}</span>`);
+        }
+        if ((cat.new_models || []).length) {
+          alerts.push(`<span class="badge ok">Model mới phát hiện: ${cat.new_models.join(", ")}</span>`);
+        }
+        if ((cat.retiring_models || []).length) {
+          alerts.push(`<span class="badge warn">Model sắp ngừng hỗ trợ / gỡ bỏ: ${cat.retiring_models.join(", ")}</span>`);
+        }
+        document.getElementById("catalog-alerts").innerHTML = alerts.join(" ");
         const rows = (cat.models || []).map(m => `
-          <tr><td>${m.provider}</td><td><code>${m.model_id}</code></td><td>${m.auth_mode}</td><td><span class="badge">${m.status}</span></td><td>${m.context_limit ?? "Không có dữ liệu"}</td></tr>
+          <tr>
+            <td>${m.provider}</td>
+            <td><code>${m.model_id}</code></td>
+            <td>${m.cli_family || "-"} ${m.cli_version || ""}</td>
+            <td>${m.auth_mode}</td>
+            <td>${verificationStageBadge(m.verification_stage || m.status)}</td>
+          </tr>
         `).join("");
         document.getElementById("catalog-view").innerHTML = rows
-          ? `<p>Snapshot: <code>${cat.snapshot_id}</code> | Stale: ${cat.is_stale}</p><table><tr><th>Provider</th><th>Model ID</th><th>Auth</th><th>Trạng thái</th><th>Context</th></tr>${rows}</table>`
-          : `<p class="badge warn">Chưa có snapshot danh mục model nào.</p>`;
+          ? `<p>Snapshot: <code>${cat.snapshot_id}</code> | Cập nhật: ${cat.fetched_at || "-"} | Stale: ${cat.is_stale}</p><table><tr><th>Provider</th><th>Model ID</th><th>CLI</th><th>Auth</th><th>Mức xác minh</th></tr>${rows}</table>`
+          : `<p class="badge warn">Chưa có snapshot danh mục model. Bấm "Quét lại CLI &amp; Cập nhật Danh mục".</p>`;
       } catch (e) { toast(e.message); }
     }
 

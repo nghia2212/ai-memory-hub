@@ -250,6 +250,51 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         response.delete_cookie(SESSION_COOKIE_NAME)
         return {"authenticated": False}
 
+    async def _proxy_host_brain(
+        method: str,
+        path: str,
+        *,
+        json_body: Any = None,
+        timeout: float = 95.0,
+    ) -> JSONResponse:
+        headers = {"Authorization": f"Bearer {cfg.bridge_runner_token}"} if cfg.bridge_runner_token else {}
+        url = f"{cfg.host_brain_url.rstrip('/')}{path}"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.request(method, url, headers=headers, json=json_body)
+                content = resp.json() if resp.content else {}
+                return JSONResponse(status_code=resp.status_code, content=content)
+        except httpx.HTTPError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": {
+                        "code": "host_brain_unavailable",
+                        "message": "Host Brain Agent chưa chạy trên host (chạy scripts/start-host-brain-agent.ps1).",
+                    }
+                },
+            )
+
+    async def _probe_host_brain_status() -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(f"{cfg.host_brain_url.rstrip('/')}/healthz")
+                if r.status_code == 200:
+                    return {
+                        "ready": True,
+                        "state": "active",
+                        "label": "Đang hoạt động",
+                        "detail": "Host Brain Agent (agy/claude/codex CLI) đang kết nối.",
+                    }
+        except Exception:
+            pass
+        return {
+            "ready": False,
+            "state": "disabled",
+            "label": "Đã tắt",
+            "detail": "Host Brain Agent chạy theo yêu cầu trên host (chạy scripts/start-host-brain-agent.ps1 để bật).",
+        }
+
     # --- Read-only Proxy Routes ---
     @app.get("/api/status")
     async def api_status() -> dict[str, Any]:
@@ -257,6 +302,7 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             "bridge": await _probe_health(cfg.bridge_url),
             "codebase": await _probe_health(cfg.codebase_url),
             "hermes": await _probe_hermes_status(),
+            "host_brain": await _probe_host_brain_status(),
         }
 
     @app.get("/api/hermes/config")
@@ -471,6 +517,130 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     @app.get("/api/v2/catalog")
     async def api_v2_catalog() -> JSONResponse:
         return await _proxy_bridge("GET", "/v2/catalog")
+
+    @app.post("/api/v2/catalog/sync")
+    async def api_v2_catalog_sync(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_host_brain("POST", "/host/discover", json_body={}, timeout=40.0)
+
+    @app.post("/api/v2/brain/probe")
+    async def api_v2_brain_probe(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        body = await request.json()
+        # Enforce no automatic paid API usage
+        body["allow_paid_api"] = bool(body.get("allow_paid_api", False))
+        return await _proxy_host_brain("POST", "/host/probe-model", json_body=body, timeout=75.0)
+
+    @app.post("/api/v2/plans/analyze")
+    async def api_v2_plan_analyze(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        body = await request.json()
+        project_id = str(body.get("project_id") or "")
+        worktree_id = str(body.get("worktree_id") or "")
+        objective = str(body.get("objective") or "").strip()
+        if not project_id or not worktree_id or not objective:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": {"code": "invalid_input", "message": "Cần project_id, worktree_id và objective"}},
+            )
+
+        # Heuristic complexity/task_type classification if not provided
+        low_obj = objective.lower()
+        task_type = body.get("task_type")
+        if not task_type:
+            if any(k in low_obj for k in ("kiến trúc", "architect", "thiết kế")):
+                task_type = "architecture"
+            elif any(k in low_obj for k in ("lỗi", "bug", "debug", "sửa")):
+                task_type = "debugging"
+            elif any(k in low_obj for k in ("test", "kiểm thử", "qa")):
+                task_type = "testing"
+            elif any(k in low_obj for k in ("ui", "giao diện", "dashboard")):
+                task_type = "ui"
+            elif any(k in low_obj for k in ("review", "rà soát", "đánh giá")):
+                task_type = "review"
+            else:
+                task_type = "implementation"
+        complexity = body.get("complexity")
+        if not complexity:
+            if len(objective) < 60:
+                complexity = "S"
+            elif len(objective) < 180:
+                complexity = "M"
+            else:
+                complexity = "L"
+
+        role_name = "tier1_light" if complexity in {"XS", "S"} else ("tier2_primary" if complexity == "M" else "tier3_advanced")
+        # Fetch project's effective Brain config from Bridge
+        brain_resp = await _proxy_bridge("GET", "/v2/brain/config", params={"project_id": project_id})
+        brain_data = {}
+        try:
+            import json as _json
+            brain_data = _json.loads(brain_resp.body.decode("utf-8"))
+        except Exception:
+            brain_data = {}
+        roles = {r.get("role_name"): r for r in brain_data.get("roles", [])}
+        chosen = roles.get(role_name) or roles.get("tier2_primary") or {}
+        provider = chosen.get("effective_provider") or "agy"
+        model_id = chosen.get("effective_model_id") or "claude-sonnet-5-5-medium"
+        effort = chosen.get("effective_effort") or "medium"
+        auth_mode = chosen.get("auth_mode") or "subscription_cli"
+
+        # Never auto-select paid api_key unless explicitly allowed
+        if auth_mode == "api_key" and not brain_data.get("allow_paid_api_fallback", False):
+            provider = "agy"
+            model_id = "claude-sonnet-5-5-medium"
+            effort = "medium"
+            auth_mode = "subscription_cli"
+
+        task_spec = {
+            "task_key": "T1",
+            "title": objective[:120],
+            "objective": objective,
+            "dependencies": [],
+            "owned_paths": [],
+            "acceptance_checks": ["Báo cáo tóm tắt có bằng chứng kiểm tra thực tế"],
+            "features": {
+                "rubric_version": "v2.0",
+                "task_type": task_type,
+                "complexity": complexity,
+                "file_count": 1,
+                "total_file_bytes": 4096,
+                "expected_edits": 0,
+                "expected_tests": 1,
+                "dependency_count": 0,
+                "uncertainty_level": "low" if complexity in {"XS", "S"} else "medium",
+            },
+            "assigned_agent": provider,
+            "assigned_provider": provider,
+            "assigned_model_id": model_id,
+            "assigned_effort": effort,
+            "auth_mode": auth_mode,
+            "max_retries": 1,
+        }
+        plan_payload = {
+            "project_id": project_id,
+            "worktree_id": worktree_id,
+            "objective": objective,
+            "tasks": [task_spec],
+        }
+        created = await _proxy_bridge("POST", "/v2/plans", use_admin=True, json_body=plan_payload)
+        return created
+
+    @app.post("/api/v2/plans/{plan_id}/dispatch")
+    async def api_v2_plan_dispatch(plan_id: str, project_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        body = await request.json() if await request.body() else {}
+        return await _proxy_host_brain(
+            "POST",
+            "/host/execute-plan",
+            json_body={
+                "project_id": project_id,
+                "worktree_id": body.get("worktree_id", ""),
+                "plan_id": plan_id,
+                "worktree_path": body.get("worktree_path"),
+            },
+            timeout=105.0,
+        )
 
     @app.get("/api/v2/evaluations")
     async def api_v2_evaluations(project_id: str | None = None) -> JSONResponse:
