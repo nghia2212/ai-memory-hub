@@ -1786,7 +1786,8 @@ class V2BridgeService:
             ).fetchone()
             if not row:
                 raise BridgeError(404, "session_not_found", "Session not found for project")
-            conn.execute("DELETE FROM v22_execution_traces WHERE session_id=? AND step_type='session_usage'", (session_id,))
+            # Retain trace hierarchy but remove session accounting on retention deletion.
+            conn.execute("UPDATE v22_execution_traces SET input_tokens=NULL,output_tokens=NULL,cache_read_tokens=NULL,cache_write_tokens=NULL,reasoning_tokens=NULL,cost_usd=NULL WHERE session_id=?", (session_id,))
             conn.execute("DELETE FROM v2_sessions WHERE id = ?", (session_id,))
             self._audit(
                 conn,
