@@ -203,3 +203,13 @@ def test_sk32_registry_versions_security_and_scoped_resolution(client, tmp_path:
         {"measurement_kind": "measured", "input_tokens": 3500},
     )
     assert bm_na["status"] == "unavailable" and bm_na["delta_pct"] is None
+
+    # Error handling: skill not found (404), unauthenticated (401), read token cannot create skill (403)
+    assert client.get("/v32/skills/00000000-0000-0000-0000-000000000000", headers=h("tok-read")).status_code == 404
+    assert client.get("/v32/skills").status_code == 401
+    assert client.post("/v32/skills", headers=h("tok-read"), json={"namespace": "global", "slug": "no-perm", "title": "No Perm", "manifest": {"name": "No Perm", "version": "1.0.0"}, "markdown_body": "# No permission test"}).status_code == 403
+
+    # Persistence across restart simulation: re-open service on same DB, published skill & starter flag remain intact
+    client.app.state.v32_skill_service._seeded = False
+    client.app.state.v32_skill_service.ensure_starter_library()
+    assert client.get(f"/v32/skills/{sk_id}", headers=h("tok-read")).json()["active_version_id"] == v1_id

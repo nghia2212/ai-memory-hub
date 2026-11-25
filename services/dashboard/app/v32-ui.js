@@ -1,4 +1,4 @@
-/* V3.2 (SK32) Dashboard UI: Kho Skill & Quy tắc (Centralized Skill Management) + P6A Scope Cascading Helpers.
+/* V3.2 (SK32) Dashboard UI: Kho Skill & Quy tắc (Centralized Skill Management) + Skill Telemetry.
  * All untrusted markdown/values rendered strictly via textContent / DOM APIs (no raw HTML execution). */
 (() => {
   "use strict";
@@ -90,6 +90,19 @@
       $("sk32-detail-title").textContent = `${d.namespace}/${d.slug} — ${d.title} (${d.lifecycle})`;
       body.replaceChildren();
 
+      // MCP Dependencies & Manifest summary
+      const latest = (d.versions || [])[0];
+      const man = latest?.manifest || {};
+      const depBox = el("div", null, "row-actions");
+      depBox.style.marginBottom = "10px";
+      depBox.append(
+        el("span", `Required MCP: ${(man.required_mcp_ids || []).join(", ") || "Không"}`, "badge muted"),
+        el("span", `Optional MCP: ${(man.optional_mcp_ids || []).join(", ") || "Không"}`, "badge muted"),
+        el("span", `Required Tools: ${(man.required_tool_names || []).join(", ") || "Không"}`, "badge muted"),
+        el("span", `Capabilities: ${(man.applicable_capabilities || []).join(", ") || "Chung"}`, "badge ok")
+      );
+      body.append(depBox);
+
       // Versions table with Publish / Rollback
       const vTbl = el("table", null, "trace-table");
       const vHr = el("tr");
@@ -138,11 +151,35 @@
       }
       body.append(el("h4", "Lịch sử phiên bản (Immutable)"), vTbl);
 
-      // Safe markdown preview (strictly textContent, zero HTML execution)
-      const latest = (d.versions || [])[0];
+      // Safe markdown preview + Create New Draft Version form
       if (latest) {
         body.append(el("h4", `Nội dung SKILL.md (v${latest.version} — Safe Preview)`), el("pre", latest.markdown_body));
       }
+
+      const editWrap = el("div", null, "card");
+      editWrap.style.marginTop = "10px";
+      editWrap.append(el("h4", "Tạo phiên bản Draft mới (không sửa lịch sử bản đã Publish)"));
+      const inVer = el("input"); inVer.value = latest ? `${latest.version}-next` : "1.0.1";
+      const inBody = el("textarea"); inBody.rows = 4; inBody.value = latest?.markdown_body || "";
+      const bNewDraft = el("button", "Lưu thành Draft mới", "secondary");
+      bNewDraft.type = "button";
+      bNewDraft.addEventListener("click", async () => {
+        try {
+          await apiFetch(`/api/v32/skills/${encodeURIComponent(d.id)}/drafts`, {
+            method: "POST",
+            body: JSON.stringify({
+              version: inVer.value.trim(),
+              manifest: { ...man, name: man.name || d.title, version: inVer.value.trim() },
+              markdown_body: inBody.value,
+              expected_updated_at: d.updated_at,
+            }),
+          });
+          toast(`Đã tạo Draft v${inVer.value.trim()}.`);
+          openSkillDetail(d.id);
+        } catch (e) { toast("Lỗi tạo draft: " + e.message); }
+      });
+      editWrap.append(el("label", "Số phiên bản mới"), inVer, el("label", "Nội dung SKILL.md mới"), inBody, bNewDraft);
+      body.append(editWrap);
 
       // Add Binding form
       const bWrap = el("div", null, "card");
@@ -255,11 +292,101 @@
     }
   }
 
+  async function loadSkillRuns() {
+    const pid = $("sk32-res-proj")?.value || $("sk32-cand-proj")?.value;
+    const box = $("sk32-runs-list");
+    if (!pid || !box) return;
+    box.textContent = "Đang tải Skill Telemetry...";
+    try {
+      const res = await apiFetch(`/api/v32/runs?project_id=${encodeURIComponent(pid)}&limit=30`);
+      const items = res.items || [];
+      box.replaceChildren();
+      if (!items.length) {
+        box.append(el("p", "Chưa có lượt phân giải/nạp Skill nào cho dự án này.", "trace-muted"));
+        return;
+      }
+      const tbl = el("table", null, "trace-table");
+      const hr = el("tr");
+      for (const h of ["Thời gian (VN)", "Version / Hash", "Trạng thái (Telemetry)", "Adapter", "Lý do chọn", "Bytes / Token"]) hr.append(el("th", h));
+      tbl.append(hr);
+      for (const r of items) {
+        const tr = el("tr");
+        const tokLabel = r.input_tokens != null ? `${r.input_tokens} (${r.measurement_kind})` : `Unknown (${r.measurement_kind})`;
+        for (const v of [
+          vnTime(r.created_at),
+          `v${r.version_str} (${(r.content_hash || "").slice(0, 8)})`,
+          r.status,
+          r.adapter,
+          r.selection_reason,
+          `${r.bytes_count} B · ${tokLabel}`,
+        ]) tr.append(el("td", v));
+        tbl.append(tr);
+      }
+      box.append(tbl);
+    } catch (e) {
+      box.textContent = "Lỗi tải Skill Telemetry: " + e.message;
+    }
+  }
+
+  function renderResolveResult(res) {
+    const box = $("sk32-resolve-out");
+    if (!box) return;
+    box.replaceChildren();
+    const stCls = res.status === "ready" ? "badge ok" : res.status === "blocked" ? "badge err" : "badge warn";
+    box.append(
+      el("span", `Trạng thái: ${res.status} · Budget: ${res.used_chars}/${res.max_chars} chars · Đã chọn: ${(res.selected_skills || []).length}`, stCls)
+    );
+    if ((res.blockers || []).length) {
+      const ul = el("ul");
+      for (const b of res.blockers) ul.append(el("li", `BLOCKER: ${b}`));
+      box.append(ul);
+    }
+    if ((res.degraded_notes || []).length) {
+      const ul = el("ul");
+      for (const d of res.degraded_notes) ul.append(el("li", `Cảnh báo MCP tùy chọn: ${d}`));
+      box.append(ul);
+    }
+    if ((res.selected_skills || []).length) {
+      const tbl = el("table", null, "trace-table");
+      const hr = el("tr");
+      for (const h of ["Skill", "Version / Hash", "Nguồn kế thừa", "Lý do chọn", "Bắt buộc"]) hr.append(el("th", h));
+      tbl.append(hr);
+      for (const s of res.selected_skills) {
+        const tr = el("tr");
+        for (const v of [
+          `${s.namespace}/${s.slug}`,
+          `v${s.version} (${(s.content_hash || "").slice(0, 8)})`,
+          s.source_scope,
+          s.selection_reason,
+          s.mandatory ? "MANDATORY" : s.required ? "Required" : "Optional",
+        ]) tr.append(el("td", v));
+        tbl.append(tr);
+      }
+      box.append(tbl);
+    } else {
+      box.append(el("p", "Không có Skill nào được kích hoạt cho phạm vi và capability này.", "trace-muted"));
+    }
+  }
+
   window.addEventListener("hub-ready", () => {
-    $("sk32-refresh")?.addEventListener("click", () => { loadSkills(); loadCandidates(); });
+    $("sk32-refresh")?.addEventListener("click", () => { loadSkills(); loadCandidates(); loadSkillRuns(); });
     $("sk32-filter-q")?.addEventListener("keydown", e => { if (e.key === "Enter") loadSkills(); });
     $("sk32-filter-life")?.addEventListener("change", loadSkills);
     $("sk32-cand-proj")?.addEventListener("change", loadCandidates);
+    $("sk32-res-proj")?.addEventListener("change", loadSkillRuns);
+
+    $("sk32-import-btn")?.addEventListener("click", async () => {
+      const raw = prompt("Dán JSON SKILL import (gồm slug, title, source, license, manifest, markdown_body):");
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        const prev = await apiFetch("/api/v32/skills/import", { method: "POST", body: JSON.stringify({ ...parsed, preview_only: true, approved: false }) });
+        if (!confirm(`Import Preview OK (hash=${prev.content_hash}, bytes=${prev.bytes}, license=${prev.license}). Xác nhận phê duyệt Import?`)) return;
+        await apiFetch("/api/v32/skills/import", { method: "POST", body: JSON.stringify({ ...parsed, preview_only: false, approved: true }) });
+        toast("Đã import Skill Draft thành công.");
+        loadSkills();
+      } catch (e) { toast("Lỗi Import Skill: " + e.message); }
+    });
 
     $("sk32-create-btn")?.addEventListener("click", async () => {
       const slug = ($("sk32-new-slug")?.value || "").trim();
@@ -298,30 +425,36 @@
           method: "POST",
           body: JSON.stringify({ project_id: pid, agent_role: role, required_capabilities: caps, record_run: false }),
         });
-        $("sk32-resolve-out").replaceChildren(el("pre", JSON.stringify(res, null, 2)));
+        renderResolveResult(res);
       } catch (e) {
         $("sk32-resolve-out").textContent = "Lỗi phân giải Skill: " + e.message;
       }
     });
 
-    // Populate project selectors inside Skills tab when projects load
-    const syncSkillProjects = () => {
-      const projs = window.projectsCache || [];
+    const syncSkillProjects = async () => {
+      let projs = [];
+      try {
+        const r = await apiFetch("/api/projects");
+        projs = r.items || [];
+      } catch (_) {
+        projs = [];
+      }
       for (const id of ["sk32-res-proj", "sk32-cand-proj"]) {
         const sel = $(id);
         if (sel && projs.length) {
           const cur = sel.value;
           sel.replaceChildren(...projs.map(p => new Option(p.name, p.project_id)));
-          if (cur) sel.value = cur;
+          if (cur && projs.some(p => p.project_id === cur)) sel.value = cur;
         }
       }
     };
 
-    window.addEventListener("hub-tab", e => {
+    window.addEventListener("hub-tab", async e => {
       if (e.detail === "skills") {
-        syncSkillProjects();
+        await syncSkillProjects();
         loadSkills();
         loadCandidates();
+        loadSkillRuns();
       }
     });
   });

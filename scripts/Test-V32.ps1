@@ -4,20 +4,32 @@ param(
     [switch]$DryRun,
     [switch]$Upgrade,
     [switch]$RunTests,
-    [switch]$VerifySkills,
-    [switch]$VerifyP6A,
     [int]$HealthTimeoutSec = 120,
     [int]$TestTimeoutSec = 420
 )
 $ErrorActionPreference = 'Stop'
+$script:Summary = @()
+
+function Record-Gate([string]$Gate, [string]$Status, [string]$Detail) {
+    $script:Summary += [pscustomobject]@{ Gate = $Gate; Status = $Status; Detail = $Detail }
+    $color = switch ($Status) {
+        'PASS' { 'Green' }
+        'FAIL' { 'Red' }
+        'BLOCKED' { 'Yellow' }
+        default { 'DarkGray' }
+    }
+    Write-Host ("  [{0,-7}] {1}: {2}" -f $Status, $Gate, $Detail) -ForegroundColor $color
+}
 
 function Write-Step([string]$Msg) {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Msg) -ForegroundColor Cyan
 }
+
 function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Exe failed (exit $LASTEXITCODE)." }
 }
+
 function Read-Env {
     $map = @{}
     foreach ($line in Get-Content -LiteralPath '.env' -Encoding UTF8) {
@@ -27,6 +39,7 @@ function Read-Env {
     }
     return $map
 }
+
 function Wait-Health([string]$Url, [int]$TimeoutSec) {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
@@ -42,65 +55,84 @@ function Wait-Health([string]$Url, [int]$TimeoutSec) {
 if (!(Test-Path -LiteralPath $RepoPath -PathType Container)) { throw "Repository folder not found: $RepoPath" }
 Push-Location -LiteralPath $RepoPath
 try {
-    Write-Step '1/7 Environment Check (Git, Docker, .env; no volume deletion, no secrets printed)...'
+    Write-Step '1/8 Read-Only Environment & Docker Check (no volume deletion, no DB reset, no paid API, no auto-restart)...'
     $branch = (& git rev-parse --abbrev-ref HEAD).Trim()
-    Invoke-Checked 'docker' @('info', '--format', '{{.ServerVersion}}')
-    if (!(Test-Path -LiteralPath '.env')) { throw 'Existing .env is required.' }
+    $headSha = (& git rev-parse --short HEAD).Trim()
+    $dockerVer = (& docker info --format '{{.ServerVersion}}').Trim()
+    Record-Gate 'Git & Docker' 'PASS' "Branch=$branch ($headSha), Docker=$dockerVer"
+
+    if (!(Test-Path -LiteralPath '.env')) {
+        Record-Gate 'Config (.env)' 'BLOCKED' 'Missing .env file'
+        throw 'Existing .env is required.'
+    }
     $envMap = Read-Env
     $bridge = 'http://127.0.0.1:' + $(if ($envMap['BRIDGE_PORT']) { $envMap['BRIDGE_PORT'] } else { '8082' })
     $codebase = 'http://127.0.0.1:' + $(if ($envMap['CODEBASE_PORT']) { $envMap['CODEBASE_PORT'] } else { '8081' })
     $dash = 'http://127.0.0.1:' + $(if ($envMap['HUB_PORT']) { $envMap['HUB_PORT'] } else { '8080' })
-    Write-Host "  Branch: $branch | Bridge=$bridge | Codebase=$codebase | Dashboard=$dash" -ForegroundColor Gray
 
     if ($DryRun) {
-        Write-Host '[DRY-RUN] Ready for V3.2 (SK32) Schema v9 upgrade & verification.' -ForegroundColor Yellow
+        Record-Gate 'DryRun' 'SKIP' "Bridge=$bridge | Codebase=$codebase | Dashboard=$dash (no changes performed)"
         return
     }
 
     if ($Upgrade) {
-        Write-Step '2/7 Online SQLite backup before Schema V9 upgrade (preserves all V3/V3.1 data & volumes)...'
+        Write-Step '2/8 Online SQLite Backup & Safe Rebuild (preserves all volumes & V1-V3.1 data)...'
         $null = Wait-Health "$bridge/healthz" $HealthTimeoutSec
         $bk = Invoke-RestMethod -Method Post -Uri "$bridge/v1/backup" -Headers @{ Authorization = ('Bearer ' + $envMap['BRIDGE_ADMIN_TOKEN']) } -TimeoutSec 120
-        if (!$bk.backup_id -or !$bk.sha256) { throw 'Backup failed. Aborting.' }
-        Write-Host "[PASS] Pre-V3.2 backup ID: $($bk.backup_id) (schema=$($bk.schema_version))" -ForegroundColor Green
+        if (!$bk.backup_id -or !$bk.sha256) { throw 'Online backup not confirmed. Upgrade aborted.' }
+        Record-Gate 'Pre-Upgrade Backup' 'PASS' "backup_id=$($bk.backup_id) schema=$($bk.schema_version)"
         Invoke-Checked 'docker' @('compose', 'config', '--quiet')
         Invoke-Checked 'docker' @('compose', 'up', '-d', '--build', 'codebase', 'memory-bridge', 'dashboard')
+        Record-Gate 'Docker Upgrade' 'PASS' 'Rebuilt & restarted codebase, memory-bridge, dashboard cleanly'
+    } else {
+        Record-Gate 'Upgrade' 'SKIP' 'Default read-only mode (pass -Upgrade to backup & rebuild)'
     }
 
-    Write-Step '3/7 Checking Service Health & Schema V9...'
+    Write-Step '3/8 Checking Service Health, Schema V9 & Host Runner...'
     $bh = Wait-Health "$bridge/healthz" $HealthTimeoutSec
     $null = Wait-Health "$codebase/healthz" $HealthTimeoutSec
     $null = Wait-Health "$dash/healthz" $HealthTimeoutSec
-    Write-Host "[PASS] Bridge (schema=$($bh.schema_version)), Codebase, Dashboard healthy." -ForegroundColor Green
+    $schemaStatus = if ([int]$bh.schema_version -ge 9) { 'PASS' } else { 'FAIL' }
+    Record-Gate 'Health & Schema' $schemaStatus "Bridge schema=$($bh.schema_version), Codebase=ready, Dashboard=ready"
+    if ($schemaStatus -eq 'FAIL') { throw "Expected schema >= 9, got $($bh.schema_version)." }
 
-    Write-Step '4/7 Verifying Dashboard V3.2 Auth/CSRF boundary (unauthenticated must return 401)...'
+    try {
+        $hr = Invoke-RestMethod -Uri 'http://127.0.0.1:8084/healthz' -TimeoutSec 3
+        Record-Gate 'Host Runner' 'PASS' "Host Brain Agent ready=$($hr.ready)"
+    } catch {
+        Record-Gate 'Host Runner' 'SKIP' 'Host Brain Agent (:8084) not running (optional on-demand)'
+    }
+
+    Write-Step '4/8 Verifying RBAC / Auth 401 Boundary on V3.2 & P6A Dashboard APIs...'
+    $authOk = $true
     foreach ($ep in @('/api/v31/businesses', '/api/v32/skills', '/api/v32/bindings', '/api/v2/traces/scope-options?project_id=20ef268d-5a07-43a7-a66f-8a83e87dd0f7')) {
         $code = 0
         try { $null = Invoke-WebRequest -UseBasicParsing -Uri "$dash$ep" -TimeoutSec 10; $code = 200 } catch {
             if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
         }
-        if ($code -ne 401) { throw "Security regression: unauthenticated GET $ep returned HTTP $code." }
+        if ($code -ne 401) { $authOk = $false; Record-Gate "Auth $ep" 'FAIL' "Expected 401, got $code" }
     }
-    Write-Host '[PASS] All V3.2 & P6A Dashboard endpoints enforce HTTP 401 when unauthenticated.' -ForegroundColor Green
+    if ($authOk) { Record-Gate 'Dashboard Auth (401)' 'PASS' 'All V3.1/V3.2/P6A endpoints block unauthenticated requests' } else { throw 'Auth boundary failed.' }
 
     $readHdr = @{ Authorization = ('Bearer ' + $envMap['BRIDGE_READ_TOKEN']) }
-    if ($VerifySkills -and [int]$bh.schema_version -ge 9) {
-        Write-Step '5/7 Verifying SK32 Skill Registry & Starter Library live...'
-        $sks = Invoke-RestMethod -Uri "$bridge/v32/skills" -Headers $readHdr -TimeoutSec 15
-        Write-Host "[PASS] SK32 Skill Library active: $($sks.total) skills (incl. 30 reviewed starter skills)." -ForegroundColor Green
-    }
+    Write-Step '5/8 Read-Only Check: Skill Registry, MCP Connectivity & P6A Scope Options...'
+    $sks = Invoke-RestMethod -Uri "$bridge/v32/skills" -Headers $readHdr -TimeoutSec 15
+    Record-Gate 'Skill Registry' $(if ($sks.total -ge 30) { 'PASS' } else { 'FAIL' }) "Active skills=$($sks.total)"
 
-    if ($VerifyP6A) {
-        Write-Step '5b/7 Verifying P6A Task-Centric Execution Map scope-options live...'
-        $projs = Invoke-RestMethod -Uri "$bridge/v1/projects" -Headers $readHdr -TimeoutSec 15
-        foreach ($p in @($projs.items)) {
-            $opts = Invoke-RestMethod -Uri "$bridge/v2/traces/scope-options?project_id=$($p.project_id)" -Headers $readHdr -TimeoutSec 15
-            Write-Host "[PASS] P6A Scope ($($p.name)): plans=$(@($opts.plans).Count), tasks=$(@($opts.tasks).Count), attempts=$(@($opts.attempts).Count)." -ForegroundColor Green
-        }
+    $mcps = Invoke-RestMethod -Uri "$bridge/v31/mcp/servers" -Headers $readHdr -TimeoutSec 15
+    $readyMcps = @($mcps.items | Where-Object { $_.health_status -eq 'ready' }).Count
+    Record-Gate 'MCP Registry' $(if ($readyMcps -ge 2) { 'PASS' } else { 'BLOCKED' }) "Servers=$(@($mcps.items).Count), ready=$readyMcps"
+
+    $projs = Invoke-RestMethod -Uri "$bridge/v1/projects" -Headers $readHdr -TimeoutSec 15
+    $p6aDetails = @()
+    foreach ($p in @($projs.items)) {
+        $opts = Invoke-RestMethod -Uri "$bridge/v2/traces/scope-options?project_id=$($p.project_id)" -Headers $readHdr -TimeoutSec 15
+        $p6aDetails += "$($p.name)(plans=$(@($opts.plans).Count),tasks=$(@($opts.tasks).Count),attempts=$(@($opts.attempts).Count))"
     }
+    Record-Gate 'P6A Scope Options' 'PASS' ($p6aDetails -join '; ')
 
     if ($RunTests) {
-        Write-Step "6/7 Running full V2.2.4 + V3 + V3.1 + V3.2 (SK32 & P6A) pytest suite in isolated Docker..."
+        Write-Step "6/8 Running Isolated Docker Pytest Suite (V2.2.4 + V3 + V3.1 + V3.2 & P6A, timeout ${TestTimeoutSec}s)..."
         $root = (Get-Location).Path
         $mount = "type=bind,source=$root,target=/repo,readonly"
         $suites = @(
@@ -131,11 +163,14 @@ try {
         ) -join ' '
         $cmd = "apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null && python -m venv /tmp/v32test && /tmp/v32test/bin/pip install -q -r /repo/services/memory-bridge/requirements.txt -r /repo/services/dashboard/requirements.txt pytest && cd /repo && PYTHONPATH=/repo /tmp/v32test/bin/python -m pytest -p no:cacheprovider -q $suites"
         Invoke-Checked 'docker' @('run', '--rm', '--mount', $mount, '-e', 'PYTHONDONTWRITEBYTECODE=1', 'python:3.12-slim', 'sh', '-c', $cmd)
-        Write-Host '[PASS] Full V2.2.4 + V3 + V3.1 + V3.2 pytest suite passed.' -ForegroundColor Green
+        Record-Gate 'Isolated Pytest Suite' 'PASS' 'All V2.2.4 + V3 + V3.1 + V3.2 (SK32 & P6A) suites passed'
+    } else {
+        Record-Gate 'Isolated Pytest Suite' 'SKIP' 'Pass -RunTests to run full isolated Docker pytest suite'
     }
 
-    Write-Step '7/7 Test-V32.ps1 completed cleanly.'
-    Write-Host "Dashboard V3.2: $dash/ (No paid API calls, no volume deletion, no main merge)." -ForegroundColor Green
+    Write-Step '7/8 Acceptance Summary Table:'
+    $script:Summary | Format-Table -AutoSize
+    Write-Step "8/8 Test-V32.ps1 completed cleanly. Dashboard: $dash/"
 } finally {
     Pop-Location
 }

@@ -713,7 +713,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <section id="tab-skills" class="panel">
       <div class="trace-page-head">
         <h2>Kho Skill &amp; Quy tắc (Centralized Skill Management — V3.2 / SK32)</h2>
-        <button id="sk32-refresh" type="button" class="primary">Làm mới Kho Skill</button>
+        <div class="row-actions">
+          <button id="sk32-import-btn" type="button" class="secondary">Import SKILL.md (Preview)</button>
+          <button id="sk32-refresh" type="button" class="primary">Làm mới Kho Skill</button>
+        </div>
       </div>
       <div class="grid">
         <div class="card">
@@ -758,12 +761,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <h3 id="sk32-detail-title">Chi tiết Skill</h3>
         <div id="sk32-detail-body"></div>
       </div>
-      <div class="card">
+      <div class="card" style="margin-bottom:16px">
         <div class="trace-page-head">
           <h3>Đề xuất Skill từ Kinh nghiệm (Experience → Skill Candidates — P7)</h3>
           <select id="sk32-cand-proj" style="width:260px"></select>
         </div>
         <div id="sk32-cand-list">Chọn dự án để xem hàng đợi phê duyệt Skill Candidate.</div>
+      </div>
+      <div class="card">
+        <h3>Skill Telemetry — Lịch sử chọn, cung cấp &amp; nạp Skill (P6)</h3>
+        <div id="sk32-runs-list">Chọn dự án ở phần Phân giải Skill để xem Skill Telemetry.</div>
       </div>
     </section>
   </main>
