@@ -39,3 +39,6 @@ Added explicit upstream-edge visualization, source navigation for fresh index ev
 
 ### P1.3 checkpoint
 Workbench task creation uses Bridge routing. Policy auth modes intersect request constraints; expired/retiring catalog entries excluded; unknown cost remains unknown; explicit cost limit requires evaluation evidence. Host dispatch rejects non-subscription CLI. Quota semantics and reasoning-effort execution still require provider-specific verification. Tests NOT RUN; no deploy.
+
+### P1.4 checkpoint
+Added nearest-rank P50/P95/P99 latency, sample counts, per-role telemetry coverage, sequential cumulative/delta aggregation, quota provenance and unknown states. Regression/browser/Windows tests NOT RUN. Full benchmark and integrated acceptance remain open.

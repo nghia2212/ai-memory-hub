@@ -1651,27 +1651,22 @@ class V2BridgeService:
             }
 
         fields = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "cost_usd")
-        deltas: dict[str, float | int] = {}
-        latest_cum: dict[str, float | int] = {}
+        totals: dict[str, float | int] = {}
         kind = "unavailable"
         for r in rows:
             if r["measurement_kind"] == "measured":
                 kind = "measured"
             elif r["measurement_kind"] == "estimated" and kind == "unavailable":
                 kind = "estimated"
-            if r["counter_mode"] == "delta":
-                for f in fields:
-                    if r[f] is not None:
-                        deltas[f] = deltas.get(f, 0) + r[f]
-            else:
-                for f in fields:
-                    if r[f] is not None:
-                        latest_cum[f] = r[f]
+            for f in fields:
+                if r[f] is not None:
+                    # A cumulative event covers previous increments; later deltas extend it.
+                    totals[f] = r[f] if r["counter_mode"] == "cumulative" else totals.get(f, 0) + r[f]
 
         out: dict[str, Any] = {"measurement_kind": kind, "sources": sorted({r["source"] for r in rows}), "observed_at": max(r["observed_at"] for r in rows)}
         for f in fields:
-            if f in deltas or f in latest_cum:
-                val = deltas.get(f, 0) + latest_cum.get(f, 0)
+            if f in totals:
+                val = totals[f]
                 out[f] = round(float(val), 6) if f == "cost_usd" else int(val)
             else:
                 out[f] = None
@@ -1857,10 +1852,12 @@ class V2BridgeService:
                     "cost_usd": None,
                 }
                 kind = "unavailable"
+                coverage = {"measured": 0, "estimated": 0, "unavailable": 0}
                 for s in sessions:
                     if s["role"] not in target_roles:
                         continue
                     c = self._aggregate_session_counters(conn, s["id"])
+                    coverage[c["measurement_kind"]] += 1
                     if c["measurement_kind"] == "measured":
                         kind = "measured"
                     elif c["measurement_kind"] == "estimated" and kind == "unavailable":
@@ -1871,6 +1868,7 @@ class V2BridgeService:
                 if totals["cost_usd"] is not None:
                     totals["cost_usd"] = round(float(totals["cost_usd"]), 6)
                 totals["measurement_kind"] = kind
+                totals["coverage"] = coverage
                 return totals
 
             quotas = self._latest_quotas(conn)

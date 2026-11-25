@@ -1177,6 +1177,12 @@ class MemoryBridgeService:
                 FROM metrics_events
                 """
             ).fetchone()
+            n = conn.execute("SELECT COUNT(latency_ms) FROM metrics_events WHERE latency_ms >= 0").fetchone()[0]
+            percentiles = {}
+            for label, pct in (("p50", 50), ("p95", 95), ("p99", 99)):
+                offset = max(0, (n * pct + 99) // 100 - 1)
+                row = conn.execute("SELECT latency_ms FROM metrics_events WHERE latency_ms >= 0 ORDER BY latency_ms LIMIT 1 OFFSET ?", (offset,)).fetchone() if n else None
+                percentiles[label] = round(float(row[0]), 2) if row else None
             counts = conn.execute(
                 """
                 SELECT
@@ -1191,6 +1197,8 @@ class MemoryBridgeService:
         has_measured_tokens = int(agg["measured_token_records"] or 0) > 0
         return {
             "query_count": int(agg["query_count"] or 0),
+            "latency_sample_count": n,
+            "latency_percentiles_ms": percentiles,
             "avg_latency_ms": round(float(agg["avg_latency_ms"] or 0.0), 2),
             "avg_result_chars": round(float(agg["avg_result_chars"] or 0.0), 1),
             "measured_tokens_available": has_measured_tokens,
