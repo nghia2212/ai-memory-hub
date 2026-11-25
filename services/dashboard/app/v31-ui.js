@@ -73,7 +73,7 @@
 
       const tbl = el("table", null, "trace-table");
       const hdr = el("tr");
-      for (const h of ["Nghiệp vụ", "Mô tả", "Dự án", "MCP (Online/Offline/Tổng)", "Model mặc định", "Trạng thái", "Cập nhật", "Thao tác"]) {
+      for (const h of ["Nghiệp vụ", "Mô tả", "Dự án", "MCP & Local Packs (Phân rã thực tế)", "Model mặc định", "Trạng thái", "Cập nhật", "Thao tác"]) {
         hdr.append(el("th", h));
       }
       tbl.append(hdr);
@@ -82,11 +82,23 @@
         const tr = el("tr");
         const tdName = el("td");
         tdName.append(el("strong", `[${b.icon}] ${b.name}`), el("br"), el("small", `slug: ${b.slug || "—"} · rev ${b.revision}`, "trace-muted"));
+        const tdMcp = el("td");
+        const boundTot = b.mcp_bound_total ?? b.mcp_configured_count ?? 0;
+        const mOn = b.mcp_online_count ?? 0;
+        const mOff = b.mcp_offline_count ?? 0;
+        const mPend = b.mcp_pending_approval_count ?? 0;
+        const mUnconf = (b.mcp_not_installed_count ?? 0) + (b.mcp_unconfigured_count ?? 0);
+        const mDis = b.mcp_disabled_count ?? 0;
+        const lpReady = b.local_packs_ready_count ?? 0;
+        tdMcp.append(
+          el("div", `Tổng liên kết: ${boundTot} (MCP Online: ${mOn} · Local Pack Ready: ${lpReady})`),
+          el("small", `Chờ duyệt: ${mPend} · Offline: ${mOff} · Chưa cài/cấu hình: ${mUnconf} · Tắt: ${mDis}`, "trace-muted")
+        );
         tr.append(
           tdName,
-          el("td", (b.description || "").slice(0, 120)),
+          el("td", (b.description || "").slice(0, 110)),
           el("td", String(b.project_count)),
-          el("td", `${b.mcp_online_count} online / ${b.mcp_offline_count} offline / ${b.mcp_configured_count}`),
+          tdMcp,
           el("td", b.default_model || "Chưa đặt")
         );
         const tdSt = el("td");
@@ -159,7 +171,19 @@
         tr.append(tdAct);
         tbl.append(tr);
       }
-      listBox.append(tbl);
+      const syncBar = el("div", null, "row-actions");
+      syncBar.style.marginBottom = "8px";
+      const bSyncDef = el("button", "Đồng bộ Binding MCP mặc định (Idempotent)", "secondary");
+      bSyncDef.type = "button";
+      bSyncDef.addEventListener("click", async () => {
+        try {
+          const sr = await apiFetch("/api/v321/businesses/sync-default-bindings", { method: "POST" });
+          toast(`Đồng bộ xong: +${sr.added_count ?? 0} binding mới (giữ nguyên tùy chỉnh người dùng).`);
+          loadBusinesses();
+        } catch (e) { toast("Lỗi đồng bộ: " + e.message); }
+      });
+      syncBar.append(bSyncDef);
+      listBox.append(syncBar, tbl);
     } catch (e) {
       listBox.textContent = "Lỗi tải nghiệp vụ: " + e.message;
     }
@@ -219,6 +243,7 @@
         bSave
       );
     } else if (tabName === "projects") {
+      body.append(el("p", "Dự án kế thừa MCP của nghiệp vụ. Hệ thống không tự gán dự án chưa xác định; bạn có thể gắn/gỡ và vô hiệu hóa MCP riêng cho từng dự án bên dưới.", "trace-muted"));
       const sel = el("select");
       for (const p of cachedProjects) sel.append(new Option(`${p.name} (${p.project_id.slice(0, 8)})`, p.project_id));
       const bAdd = el("button", "Gắn dự án vào nghiệp vụ", "primary");
@@ -234,10 +259,49 @@
         loadBusinesses();
       });
       body.append(el("label", "Chọn dự án để gắn"), sel, bAdd);
+      const ovrBox = el("div");
+      ovrBox.style.marginTop = "12px";
       const ul = el("ul");
       for (const p of d.projects || []) {
         const li = el("li");
         li.append(el("span", `${p.name} (${p.canonical_identity}) `));
+        const bOvr = el("button", "Override MCP dự án", "secondary");
+        bOvr.type = "button";
+        bOvr.addEventListener("click", async () => {
+          ovrBox.textContent = `Đang tải override MCP cho ${p.name}...`;
+          try {
+            const ov = await apiFetch(`/api/v321/projects/${encodeURIComponent(p.project_id)}/mcp-overrides?business_id=${encodeURIComponent(d.id)}`);
+            ovrBox.replaceChildren(el("h4", `Override MCP cấp Dự án: ${p.name} (chỉ thu hẹp trong quyền nghiệp vụ)`));
+            const ot = el("table", null, "trace-table");
+            const ohr = el("tr");
+            for (const h of ["Server", "Loại", "Trạng thái nghiệp vụ", "Override cấp Dự án", "Hiệu lực"]) ohr.append(el("th", h));
+            ot.append(ohr);
+            for (const item of ov.items || []) {
+              const otr = el("tr");
+              otr.append(
+                el("td", item.server_name),
+                el("td", item.server_kind === "local_tool_pack" ? "Local Tool Pack" : "MCP Server"),
+                el("td", `${item.business_enabled ? "Bật" : "Tắt"} · ${item.approval_state} · ${item.health_status}`)
+              );
+              const tdMode = el("td");
+              const msel = el("select");
+              msel.append(new Option("Kế thừa (inherit)", "inherit"), new Option("Vô hiệu hóa ở dự án (disabled)", "disabled"));
+              msel.value = item.override_mode === "disabled" ? "disabled" : "inherit";
+              msel.addEventListener("change", async () => {
+                await apiFetch(`/api/v321/projects/${encodeURIComponent(p.project_id)}/mcp-overrides`, {
+                  method: "POST",
+                  body: JSON.stringify({ business_id: d.id, server_id: item.server_id, mode: msel.value }),
+                });
+                toast(`Đã lưu override ${item.server_name} → ${msel.value}`);
+                bOvr.click();
+              });
+              tdMode.append(msel);
+              otr.append(tdMode, el("td", item.effective_enabled ? "Có hiệu lực" : "Bị tắt"));
+              ot.append(otr);
+            }
+            ovrBox.append(ot);
+          } catch (e) { ovrBox.textContent = "Lỗi tải override: " + e.message; }
+        });
         const bRm = el("button", "Gỡ", "secondary");
         bRm.type = "button";
         bRm.addEventListener("click", async () => {
@@ -246,87 +310,184 @@
           await openBusinessDetail(d.id);
           loadBusinesses();
         });
-        li.append(bRm);
+        li.append(bOvr, bRm);
         ul.append(li);
       }
-      body.append(el("h4", "Dự án đã liên kết"), ul);
+      body.append(el("h4", "Dự án đã liên kết"), ul, ovrBox);
     } else if (tabName === "mcps") {
+      const st = d.mcp_stats || {};
+      const statLine = el(
+        "p",
+        `Tổng liên kết: ${st.mcp_bound_total ?? (d.mcp_bindings || []).length} · MCP Online: ${st.mcp_online_count ?? 0} · Local Packs Ready: ${st.local_packs_ready_count ?? 0} · Chờ duyệt: ${st.mcp_pending_approval_count ?? 0} · Offline: ${st.mcp_offline_count ?? 0} · Chưa cấu hình: ${(st.mcp_not_installed_count ?? 0) + (st.mcp_unconfigured_count ?? 0)} · Tắt: ${st.mcp_disabled_count ?? 0}`,
+        "trace-muted"
+      );
+      body.append(statLine);
+
+      // Search & Filter bar across full Kho MCP
+      const filterBar = el("div", null, "row-actions");
+      const qInp = el("input");
+      qInp.placeholder = "Tìm MCP / Local Pack trong kho...";
+      qInp.style.maxWidth = "260px";
+      const kindSel = el("select");
+      kindSel.style.maxWidth = "200px";
+      kindSel.append(
+        new Option("Tất cả loại", "all"),
+        new Option("Chỉ MCP Server", "mcp_server"),
+        new Option("Chỉ Local Tool Pack", "local_tool_pack")
+      );
       const sel = el("select");
-      for (const s of cachedMcpServers) sel.append(new Option(`${s.name} [${s.transport} · ${s.approval_state} · ${s.health_status}]`, s.id));
-      const bBind = el("button", "Thêm MCP vào nghiệp vụ", "primary");
+      const modeSel = el("select");
+      modeSel.style.maxWidth = "160px";
+      modeSel.append(new Option("Theo yêu cầu (on_demand)", "on_demand"), new Option("Bắt buộc (required)", "required"), new Option("Thủ công (manual)", "manual"));
+      const prioInp = el("input");
+      prioInp.type = "number";
+      prioInp.value = "50";
+      prioInp.min = "1";
+      prioInp.max = "1000";
+      prioInp.style.maxWidth = "90px";
+      prioInp.title = "Độ ưu tiên (số nhỏ ưu tiên cao)";
+
+      const boundIds = new Set((d.mcp_bindings || []).map(x => x.server_id));
+      const rebuildAddSelect = () => {
+        const q = qInp.value.trim().toLowerCase();
+        const kf = kindSel.value;
+        sel.replaceChildren();
+        for (const s of cachedMcpServers) {
+          const isPack = s.transport === "local_tool";
+          if (kf === "mcp_server" && isPack) continue;
+          if (kf === "local_tool_pack" && !isPack) continue;
+          if (q && !`${s.name} ${s.description || ""} ${s.transport}`.toLowerCase().includes(q)) continue;
+          const tag = isPack ? "Local Pack" : "MCP Server";
+          const mark = boundIds.has(s.id) ? " [Đã gắn]" : "";
+          sel.append(new Option(`${s.name} (${tag} · ${s.approval_state} · ${s.health_status})${mark}`, s.id));
+        }
+      };
+      rebuildAddSelect();
+
+      const bBind = el("button", "Thêm / Cập nhật MCP vào nghiệp vụ", "primary");
       bBind.type = "button";
       bBind.addEventListener("click", async () => {
         if (!sel.value) return;
         await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/mcps`, {
           method: "POST",
-          body: JSON.stringify({ server_id: sel.value, enabled: true, required: false, priority: 50 }),
+          body: JSON.stringify({
+            server_id: sel.value,
+            enabled: true,
+            required: modeSel.value === "required",
+            activation_mode: modeSel.value,
+            priority: Number(prioInp.value) || 50,
+          }),
         });
-        toast("Đã gắn MCP vào nghiệp vụ.");
+        toast("Đã gắn MCP vào nghiệp vụ (không tự phê duyệt server pending_approval).");
         await openBusinessDetail(d.id);
         loadBusinesses();
       });
-      body.append(el("label", "Thêm MCP từ Kho công cụ"), sel, bBind);
+      filterBar.append(qInp, kindSel, sel, modeSel, prioInp, bBind);
+      body.append(el("label", "Tìm & thêm MCP từ Kho công cụ (dùng chung nhiều nghiệp vụ, không cài trùng)"), filterBar);
 
-      for (const m of d.mcp_bindings || []) {
-        const mc = el("div", null, "card");
-        mc.style.marginTop = "10px";
-        const top = el("div", null, "row-actions");
-        top.append(
-          el("strong", `${m.server_name} (${m.transport})`),
-          el("span", `${m.approval_state} · ${m.health_status}`, `badge ${m.health_status === "ready" ? "ok" : "warn"}`)
-        );
-        const bTog = el("button", m.enabled ? "Tắt trong nghiệp vụ" : "Bật trong nghiệp vụ", "secondary");
-        bTog.type = "button";
-        bTog.addEventListener("click", async () => {
-          await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/mcps`, {
-            method: "POST",
-            body: JSON.stringify({ server_id: m.server_id, enabled: !m.enabled, required: m.required, priority: m.priority }),
-          });
-          toast("Đã cập nhật trạng thái MCP trong nghiệp vụ.");
-          await openBusinessDetail(d.id);
-          loadBusinesses();
-        });
-        const bUnbind = el("button", "Gỡ khỏi nghiệp vụ", "secondary");
-        bUnbind.type = "button";
-        bUnbind.addEventListener("click", async () => {
-          await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/mcps/${encodeURIComponent(m.server_id)}`, { method: "DELETE" });
-          toast("Đã gỡ MCP khỏi nghiệp vụ này (không ảnh hưởng nghiệp vụ khác).");
-          await openBusinessDetail(d.id);
-          loadBusinesses();
-        });
-        top.append(bTog, bUnbind);
-        mc.append(top);
+      const boundContainer = el("div");
+      const renderBoundCards = () => {
+        const q = qInp.value.trim().toLowerCase();
+        const kf = kindSel.value;
+        boundContainer.replaceChildren();
+        for (const m of d.mcp_bindings || []) {
+          const isPack = m.server_kind === "local_tool_pack" || m.transport === "local_tool";
+          if (kf === "mcp_server" && isPack) continue;
+          if (kf === "local_tool_pack" && !isPack) continue;
+          if (q && !`${m.server_name} ${m.transport} ${m.approval_state} ${m.health_status}`.toLowerCase().includes(q)) continue;
 
-        if ((m.tools || []).length) {
-          const tbl = el("table", null, "trace-table");
-          const hr = el("tr");
-          for (const h of ["Tool", "Mức tác động", "Quyền thực thi (Backend Enforced)"]) hr.append(el("th", h));
-          tbl.append(hr);
-          for (const t of m.tools) {
-            const tr = el("tr");
-            tr.append(el("td", `${t.tool_name} — ${t.description}`), el("td", t.side_effect_level));
-            const tdP = el("td");
-            const psel = el("select");
-            psel.style.width = "180px";
-            psel.append(new Option("Deny (Từ chối mặc định)", "deny"), new Option("Approval (Cần phê duyệt)", "approval"), new Option("Allow (Cho phép)", "allow"));
-            psel.value = t.policy || "deny";
-            psel.addEventListener("change", async () => {
-              await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/tools/policy`, {
-                method: "POST",
-                body: JSON.stringify({ tool_id: t.tool_id, policy: psel.value }),
-              });
-              toast(`Đã cập nhật quyền ${t.tool_name} → ${psel.value}`);
+          const mc = el("div", null, "card");
+          mc.style.marginTop = "10px";
+          const top = el("div", null, "row-actions");
+          top.append(
+            el("strong", `${m.server_name}`),
+            el("span", isPack ? "Local Tool Pack" : `MCP Server (${m.transport})`, "badge muted"),
+            el("span", `${m.approval_state} · ${m.health_status}`, `badge ${m.health_status === "ready" && m.approval_state === "approved" ? "ok" : "warn"}`),
+            el("span", `Chế độ: ${m.activation_mode || "on_demand"} · Ưu tiên: ${m.priority}`, "badge muted")
+          );
+          const mSel = el("select");
+          mSel.style.maxWidth = "140px";
+          mSel.append(new Option("on_demand", "on_demand"), new Option("required", "required"), new Option("manual", "manual"));
+          mSel.value = m.activation_mode || (m.required ? "required" : "on_demand");
+          mSel.addEventListener("change", async () => {
+            await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/mcps`, {
+              method: "POST",
+              body: JSON.stringify({ server_id: m.server_id, enabled: m.enabled, required: mSel.value === "required", activation_mode: mSel.value, priority: m.priority }),
             });
-            tdP.append(psel);
-            tr.append(tdP);
-            tbl.append(tr);
+            toast(`Đã đổi chế độ ${m.server_name} → ${mSel.value}`);
+            await openBusinessDetail(d.id);
+          });
+          const bHealth = el("button", "Kiểm tra kết nối", "secondary");
+          bHealth.type = "button";
+          bHealth.addEventListener("click", async () => {
+            const hr = await apiFetch(`/api/v31/mcp/servers/${encodeURIComponent(m.server_id)}/health`, { method: "POST" });
+            toast(`Health ${m.server_name}: ${hr.health_status} (${hr.latency_ms ?? "?"}ms)`);
+            await openBusinessDetail(d.id);
+            loadBusinesses();
+          });
+          const bTog = el("button", m.enabled ? "Tắt trong nghiệp vụ" : "Bật trong nghiệp vụ", "secondary");
+          bTog.type = "button";
+          bTog.addEventListener("click", async () => {
+            await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/mcps`, {
+              method: "POST",
+              body: JSON.stringify({ server_id: m.server_id, enabled: !m.enabled, required: m.required, activation_mode: m.activation_mode || "on_demand", priority: m.priority }),
+            });
+            toast("Đã cập nhật trạng thái MCP trong nghiệp vụ.");
+            await openBusinessDetail(d.id);
+            loadBusinesses();
+          });
+          const bUnbind = el("button", "Gỡ khỏi nghiệp vụ", "secondary");
+          bUnbind.type = "button";
+          bUnbind.addEventListener("click", async () => {
+            await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/mcps/${encodeURIComponent(m.server_id)}`, { method: "DELETE" });
+            toast("Đã gỡ MCP khỏi nghiệp vụ này (không xóa khỏi kho, không ảnh hưởng nghiệp vụ khác).");
+            await openBusinessDetail(d.id);
+            loadBusinesses();
+          });
+          top.append(mSel, bHealth, bTog, bUnbind);
+          mc.append(top);
+          const authStr = (m.auth_requirements || []).length ? m.auth_requirements.join(", ") : "Không";
+          const resStr = m.resource_estimate || `RAM limit ${m.ram_limit_mb ?? 512}MB`;
+          const invM = m.metrics || { invocation_count: 0, success_count: 0, failure_count: 0 };
+          mc.append(
+            el("small", `Auth: ${authStr} · Tài nguyên: ${resStr} · Policy: ${m.server_activation_policy || "on_demand"} · Lượt gọi: ${invM.invocation_count} (OK ${invM.success_count} / Lỗi ${invM.failure_count}) · Latency: ${m.last_latency_ms ?? "—"}ms`, "trace-muted")
+          );
+
+          if ((m.tools || []).length) {
+            const tbl = el("table", null, "trace-table");
+            const hr = el("tr");
+            for (const h of ["Tool", "Mức tác động", "Quyền thực thi (Backend Enforced)"]) hr.append(el("th", h));
+            tbl.append(hr);
+            for (const t of m.tools) {
+              const tr = el("tr");
+              tr.append(el("td", `${t.tool_name} — ${t.description}`), el("td", t.side_effect_level));
+              const tdP = el("td");
+              const psel = el("select");
+              psel.style.width = "180px";
+              psel.append(new Option("Deny (Từ chối mặc định)", "deny"), new Option("Approval (Cần phê duyệt)", "approval"), new Option("Allow (Cho phép)", "allow"));
+              psel.value = t.policy || "deny";
+              psel.addEventListener("change", async () => {
+                await apiFetch(`/api/v31/businesses/${encodeURIComponent(d.id)}/tools/policy`, {
+                  method: "POST",
+                  body: JSON.stringify({ tool_id: t.tool_id, policy: psel.value }),
+                });
+                toast(`Đã cập nhật quyền ${t.tool_name} → ${psel.value}`);
+              });
+              tdP.append(psel);
+              tr.append(tdP);
+              tbl.append(tr);
+            }
+            mc.append(tbl);
+          } else {
+            mc.append(el("p", "Chưa có tool nào được discover trên server này (cần duyệt & kết nối thực tế).", "trace-muted"));
           }
-          mc.append(tbl);
-        } else {
-          mc.append(el("p", "Chưa có tool nào được discover trên server này.", "trace-muted"));
+          boundContainer.append(mc);
         }
-        body.append(mc);
-      }
+      };
+      qInp.addEventListener("input", () => { rebuildAddSelect(); renderBoundCards(); });
+      kindSel.addEventListener("change", () => { rebuildAddSelect(); renderBoundCards(); });
+      renderBoundCards();
+      body.append(boundContainer);
     } else if (tabName === "model") {
       const taModel = el("textarea"); taModel.rows = 6; taModel.value = JSON.stringify(d.model_policy || {}, null, 2);
       const taBudget = el("textarea"); taBudget.rows = 6; taBudget.value = JSON.stringify(d.budget_policy || {}, null, 2);
@@ -463,8 +624,9 @@
       if (monBox) {
         monBox.replaceChildren();
         const kpis = [
-          ["Tổng MCP", mon.servers_total],
-          ["Online (Ready)", mon.online],
+          ["Tổng đăng ký", mon.servers_total],
+          ["MCP Online", mon.mcp_online ?? mon.online],
+          ["Local Packs Ready", mon.local_packs_ready ?? 0],
           ["Offline / Lỗi", mon.offline],
           ["Tiến trình chạy", mon.running_processes],
           ["Chờ duyệt", mon.pending_approval],

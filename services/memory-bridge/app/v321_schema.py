@@ -103,9 +103,32 @@ CREATE TABLE IF NOT EXISTS mcp321_meta (
 );
 """
 
+# Migration 11 (strictly additive): business binding activation_mode + project-level MCP overrides
+V321_BINDINGS_OVERRIDES_SQL = """
+ALTER TABLE v31_business_mcp_bindings ADD COLUMN activation_mode TEXT NOT NULL DEFAULT 'on_demand';
+
+CREATE TABLE IF NOT EXISTS mcp321_project_mcp_overrides (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    business_id TEXT NOT NULL REFERENCES v31_business_profiles(id) ON DELETE CASCADE,
+    server_id TEXT NOT NULL REFERENCES v3_mcp_servers(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode IN ('inherit', 'enabled', 'disabled')),
+    priority INTEGER,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(project_id, business_id, server_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mcp321_proj_mcp_ovr ON mcp321_project_mcp_overrides(project_id, business_id);
+"""
+
 
 class StrictMCP321Model(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+
+class ProjectMcpOverrideRequest(StrictMCP321Model):
+    business_id: str = Field(min_length=1, max_length=64)
+    server_id: str = Field(min_length=1, max_length=128)
+    mode: Literal["inherit", "enabled", "disabled"] = "inherit"
+    priority: int | None = Field(default=None, ge=1, le=1000)
 
 
 class CatalogRegisterRequest(StrictMCP321Model):

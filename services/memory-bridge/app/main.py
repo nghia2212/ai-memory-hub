@@ -362,7 +362,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         register_all_local_packs(v31_gw)
     except Exception:
         logging.getLogger(__name__).warning("Optional local tool packs unavailable in current runtime.")
-    v321_svc = V321Mcp321Service(db, v31_gw)
+    v321_svc = V321Mcp321Service(db, v31_gw, biz_service=v31_biz)
     app.state.v321_service = v321_svc
     app.include_router(create_v321_router(v321_svc, cfg))
 

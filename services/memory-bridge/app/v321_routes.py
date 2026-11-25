@@ -10,6 +10,7 @@ from .security import AuthPrincipal as Principal, authenticate_token, extract_be
 from .v321_schema import (
     CatalogRegisterRequest,
     ExternalPlanIngestRequest,
+    ProjectMcpOverrideRequest,
     SessionToMonitoringPlanRequest,
     TraceAssociationRequest,
 )
@@ -68,5 +69,25 @@ def create_v321_router(svc: V321Mcp321Service, cfg: Settings) -> APIRouter:
     @router.delete("/external-plans/{plan_id}")
     def delete_external_plan(plan_id: str, project_id: UUID, p: Principal = Depends(admin)):
         return svc.delete_external_plan(plan_id, str(project_id))
+
+    # --- Business Default Binding Sync & Project-Level MCP Overrides ---
+    @router.post("/businesses/sync-default-bindings")
+    def sync_default_bindings(p: Principal = Depends(admin)):
+        if svc.biz_service is None:
+            return {"synced": False, "reason": "business_service_not_attached"}
+        return svc.biz_service.sync_default_business_bindings()
+
+    @router.get("/projects/{project_id}/mcp-overrides")
+    def list_project_mcp_overrides(project_id: UUID, business_id: str, p: Principal = Depends(reader)):
+        return svc.list_project_mcp_overrides(str(project_id), business_id)
+
+    @router.post("/projects/{project_id}/mcp-overrides")
+    def set_project_mcp_override(project_id: UUID, req: ProjectMcpOverrideRequest, p: Principal = Depends(admin)):
+        return svc.set_project_mcp_override(str(project_id), req)
+
+    # --- P9: Client Runtime Adapters Inventory ---
+    @router.get("/runtime-adapters")
+    def list_runtime_adapters(p: Principal = Depends(reader)):
+        return svc.get_runtime_adapters()
 
     return router

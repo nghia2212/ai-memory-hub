@@ -1075,6 +1075,15 @@ class V31McpGatewayService:
                 _record("denied", err_code="server_not_bound", err_msg="Server is not enabled for this business workspace")
                 raise BridgeError(403, "server_not_bound", "MCP server is not bound/enabled in this business workspace.")
 
+            # Project-level MCP override check (project may disable/restrict, never escalate)
+            proj_ovr = conn.execute(
+                "SELECT mode FROM mcp321_project_mcp_overrides WHERE project_id = ? AND business_id = ? AND server_id = ?",
+                (pid, req.business_id, req.server_id),
+            ).fetchone()
+            if proj_ovr and proj_ovr["mode"] == "disabled":
+                _record("denied", err_code="project_override_disabled", err_msg="Server disabled by project-level MCP override")
+                raise BridgeError(403, "project_override_disabled", "MCP server is disabled for this project.")
+
             # 6-7. Tool lookup & default-deny permission enforcement
             tool = conn.execute(
                 "SELECT * FROM v3_mcp_tools WHERE server_id = ? AND tool_name = ?",
@@ -1183,12 +1192,45 @@ class V31McpGatewayService:
             self._global_sem.release()
 
     # --- P3.3 & P3.4 & P3.6 Business-Aware Capability Routing + Task Policy Snapshot ---
+    @staticmethod
+    def _infer_capabilities_from_objective(objective: str) -> set[str]:
+        """Deterministic (0 LLM) keyword-to-capability matcher for dynamic MCP routing."""
+        text = (objective or "").lower()
+        if not text:
+            return set()
+        kw_map = {
+            "git_read": ("git ", "branch", "commit", "diff", "log "),
+            "fs_read": ("file", "thư mục", "đọc tệp", "filesystem", "path"),
+            "docs_lookup": ("docs", "tài liệu", "api ref", "context7", "library"),
+            "github_read": ("github", "pull request", "pr ", "issue"),
+            "glb_inspect": ("glb", "gltf", "3d", "mesh", "model 3d"),
+            "blender_headless": ("blender", "render 3d", "fbx"),
+            "browser_qa": ("playwright", "browser", "viewport", "screenshot", "ui qa", "trình duyệt"),
+            "devtools_debug": ("devtools", "console", "webgl", "network", "fps", "performance"),
+            "db_metadata": ("sql", "database", "schema", "oracle", "postgres", "table", "erd"),
+            "openapi_inspect": ("openapi", "swagger", "endpoint", "contract"),
+            "diagram_render": ("mermaid", "plantuml", "diagram", "kiến trúc", "c4"),
+            "java_semantic": ("java", "spring", "maven", "pom.xml", "junit"),
+            "ts_semantic": ("typescript", "tsconfig", ".ts", "phaser", "three.js"),
+            "security_scan": ("security", "secret", "bảo mật", "audit"),
+            "log_analyze": ("stacktrace", "exception", "error log", "phân tích log"),
+        }
+        inferred: set[str] = set()
+        for cap, kws in kw_map.items():
+            if any(k in text for k in kws):
+                inferred.add(cap)
+        return inferred
+
     def route_for_business(self, req: McpBusinessRouteRequest, actor: str = "planner") -> dict[str, Any]:
         self.v3_service._ensure_seeded()
         pid = str(req.project_id)
         wid = str(req.worktree_id) if req.worktree_id else None
         sid = str(req.session_id) if req.session_id else None
         wanted = {c.strip().lower() for c in req.required_capabilities if c.strip()}
+        if not wanted and req.task_objective:
+            wanted = self._infer_capabilities_from_objective(req.task_objective)
+        if not wanted:
+            raise BridgeError(422, "capabilities_required", "Provide required_capabilities or task_objective with recognizable capabilities.")
         now = utc_now_iso()
 
         with self.db.write_tx() as conn:
@@ -1214,15 +1256,25 @@ class V31McpGatewayService:
                 (req.business_id,),
             ).fetchall()
 
+            proj_overrides = {
+                r["server_id"]: {"mode": r["mode"], "priority": r["priority"]}
+                for r in conn.execute(
+                    "SELECT server_id, mode, priority FROM mcp321_project_mcp_overrides WHERE project_id = ? AND business_id = ?",
+                    (pid, req.business_id),
+                ).fetchall()
+            }
+
             tool_policies = {
                 r["tool_id"]: r["policy"]
                 for r in conn.execute("SELECT tool_id, policy FROM v31_business_tools WHERE business_id = ?", (req.business_id,)).fetchall()
             }
 
+            proposed_servers: list[dict[str, Any]] = []
             selected_tools: list[dict[str, Any]] = []
             selected_server_ids: set[str] = set()
             excluded_reasons: list[dict[str, Any]] = []
             matched_caps: set[str] = set()
+            total_schema_bytes = 0
 
             # Task overrides cannot escalate beyond bound servers!
             bound_ids = {b["server_id"] for b in bindings}
@@ -1232,8 +1284,19 @@ class V31McpGatewayService:
 
             for b in bindings:
                 srv_id = b["server_id"]
+                act_mode = b["activation_mode"] if "activation_mode" in b.keys() and b["activation_mode"] else ("required" if b["required"] else "on_demand")
+                proposed_servers.append({"server_id": srv_id, "server_name": b["server_name"], "activation_mode": act_mode, "approval_state": b["approval_state"], "health_status": b["health_status"]})
+
+                ovr = proj_overrides.get(srv_id)
+                eff_priority = ovr["priority"] if (ovr and ovr["priority"] is not None) else b["priority"]
+                if ovr and ovr["mode"] == "disabled":
+                    excluded_reasons.append({"server_id": srv_id, "server_name": b["server_name"], "reason": "disabled_by_project_override"})
+                    continue
                 if srv_id in req.exclude_server_ids:
                     excluded_reasons.append({"server_id": srv_id, "server_name": b["server_name"], "reason": "excluded_by_task_override"})
+                    continue
+                if act_mode == "manual" and req.routing_mode == "automatic" and srv_id not in req.include_server_ids and srv_id not in req.required_server_ids:
+                    excluded_reasons.append({"server_id": srv_id, "server_name": b["server_name"], "reason": "manual_activation_only"})
                     continue
                 if req.routing_mode == "manual" and req.include_server_ids and srv_id not in req.include_server_ids:
                     excluded_reasons.append({"server_id": srv_id, "server_name": b["server_name"], "reason": "not_in_manual_include_list"})
@@ -1252,7 +1315,16 @@ class V31McpGatewayService:
                     excluded_reasons.append({"server_id": srv_id, "server_name": b["server_name"], "reason": "project_not_allowed"})
                     continue
 
-                tools = conn.execute("SELECT * FROM v3_mcp_tools WHERE server_id = ? ORDER BY tool_name", (srv_id,)).fetchall()
+                tools = conn.execute(
+                    """
+                    SELECT t.*, COALESCE(te.input_schema_json, '{}') AS input_schema_json
+                    FROM v3_mcp_tools t
+                    LEFT JOIN v31_mcp_tool_ext te ON te.tool_id = t.id
+                    WHERE t.server_id = ?
+                    ORDER BY t.tool_name
+                    """,
+                    (srv_id,),
+                ).fetchall()
                 for t in tools:
                     pol = tool_policies.get(t["id"], "deny")
                     if pol == "deny":
@@ -1264,10 +1336,12 @@ class V31McpGatewayService:
                     if overlap or srv_id in req.required_server_ids:
                         matched_caps.update(overlap)
                         selected_server_ids.add(srv_id)
+                        schema_bytes = len((t["input_schema_json"] or "{}").encode("utf-8")) + len((t["description"] or "").encode("utf-8"))
                         selected_tools.append(
                             {
                                 "server_id": srv_id,
                                 "server_name": b["server_name"],
+                                "server_kind": "local_tool_pack" if b["adapter_transport"] == "local_tool" else "mcp_server",
                                 "transport": b["adapter_transport"],
                                 "tool_id": t["id"],
                                 "tool_name": t["tool_name"],
@@ -1275,17 +1349,26 @@ class V31McpGatewayService:
                                 "policy": pol,
                                 "side_effect_level": t["side_effect_level"],
                                 "requires_approval": pol == "approval" or bool(t["requires_approval"]),
-                                "priority": b["priority"],
+                                "priority": eff_priority,
+                                "schema_bytes": schema_bytes,
                             }
                         )
 
             selected_tools.sort(key=lambda x: (x["priority"], -len(x["matched_capabilities"]), x["server_name"], x["tool_name"]))
             selected_tools = selected_tools[: req.max_tools]
+            total_schema_bytes = sum(t["schema_bytes"] for t in selected_tools)
             missing_caps = sorted(wanted - matched_caps)
             blockers = [f"Missing required capability: {c}" for c in missing_caps]
             for req_srv in req.required_server_ids:
                 if req_srv not in selected_server_ids:
                     blockers.append(f"Required MCP server '{req_srv}' is unavailable or denied by policy.")
+
+            actually_invoked = 0
+            if sid:
+                actually_invoked = conn.execute(
+                    "SELECT COUNT(*) FROM v31_mcp_invocations WHERE session_id = ? AND status = 'completed'",
+                    (sid,),
+                ).fetchone()[0]
 
             # Save immutable P3.6 configuration snapshot
             snap_id = str(uuid.uuid4())
@@ -1299,7 +1382,7 @@ class V31McpGatewayService:
                 """,
                 (
                     snap_id, req.task_id, sid, pid, wid, req.business_id, biz["revision"],
-                    json.dumps({"routing_mode": req.routing_mode, "allow_write": req.allow_write, "required_capabilities": sorted(wanted)}),
+                    json.dumps({"routing_mode": req.routing_mode, "allow_write": req.allow_write, "required_capabilities": sorted(wanted), "tool_schema_bytes": total_schema_bytes}),
                     json.dumps(sorted(selected_server_ids)),
                     json.dumps(selected_tools, ensure_ascii=False),
                     json.dumps(excluded_reasons, ensure_ascii=False),
@@ -1315,18 +1398,28 @@ class V31McpGatewayService:
                 actor=actor,
                 project_id=pid,
                 worktree_id=wid,
-                details={"business_id": req.business_id, "snapshot_id": snap_id, "selected_tools": len(selected_tools), "blockers": blockers},
+                details={"business_id": req.business_id, "snapshot_id": snap_id, "selected_tools": len(selected_tools), "tool_schema_bytes": total_schema_bytes, "blockers": blockers},
             )
 
         return {
             "snapshot_id": snap_id,
             "business_id": req.business_id,
             "config_revision": biz["revision"],
+            "proposed_servers": proposed_servers,
             "selected_servers": sorted(selected_server_ids),
             "selected_tools": selected_tools,
             "excluded_reasons": excluded_reasons,
             "blockers": blockers,
             "status": "blocked" if blockers else "ready",
+            "telemetry": {
+                "proposed_count": len(proposed_servers),
+                "selected_server_count": len(selected_server_ids),
+                "provided_tool_count": len(selected_tools),
+                "actually_invoked_count": actually_invoked,
+                "tool_schema_bytes": total_schema_bytes,
+                "estimated_schema_tokens_subset": round(total_schema_bytes / 4) if total_schema_bytes else 0,
+                "subset_of_input_not_added_to_total": True,
+            },
         }
 
     # --- Monitoring & Invocation History (P9.4) ---
@@ -1362,7 +1455,9 @@ class V31McpGatewayService:
 
     def get_monitoring_summary(self) -> dict[str, Any]:
         srvs = self.list_servers(include_archived=False)["items"]
-        online = sum(1 for s in srvs if s["health_status"] == "ready")
+        mcp_online = sum(1 for s in srvs if s["transport"] != "local_tool" and s["approval_state"] == "approved" and s["health_status"] == "ready")
+        local_packs_ready = sum(1 for s in srvs if s["transport"] == "local_tool" and s["approval_state"] == "approved" and s["health_status"] == "ready")
+        online = mcp_online + local_packs_ready
         offline = sum(1 for s in srvs if s["health_status"] in ("offline", "timeout", "auth_failed", "down"))
         running = sum(1 for s in srvs if s["process_status"] == "running")
         pending = sum(1 for s in srvs if s["approval_state"] == "pending_approval")
@@ -1373,6 +1468,8 @@ class V31McpGatewayService:
         return {
             "servers_total": len(srvs),
             "online": online,
+            "mcp_online": mcp_online,
+            "local_packs_ready": local_packs_ready,
             "offline": offline,
             "running_processes": running,
             "pending_approval": pending,

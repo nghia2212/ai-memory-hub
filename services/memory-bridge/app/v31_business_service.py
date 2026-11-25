@@ -123,6 +123,111 @@ BUILTIN_BUSINESS_TEMPLATES: list[dict[str, Any]] = [
     },
 ]
 
+# Default idempotent business -> MCP/Pack bindings (MCP321).
+# Never auto-approves pending_approval servers; never overwrites user removals/edits.
+DEFAULT_BUSINESS_MCP_BINDINGS: dict[str, list[tuple[str, str, int]]] = {
+    "game-development": [
+        ("ai-memory-bridge", "required", 10),
+        ("ai-memory-codebase", "required", 10),
+        ("pack-shared", "on_demand", 20),
+        ("pack-developer", "on_demand", 25),
+        ("pack-game", "on_demand", 20),
+        ("github-mcp", "on_demand", 40),
+        ("context7-mcp", "on_demand", 40),
+        ("filesystem-mcp", "on_demand", 45),
+        ("blender-mcp", "on_demand", 60),
+        ("chrome-devtools-mcp", "on_demand", 60),
+        ("playwright-mcp", "on_demand", 60),
+    ],
+    "technical-architect": [
+        ("ai-memory-bridge", "required", 10),
+        ("ai-memory-codebase", "required", 10),
+        ("pack-shared", "on_demand", 20),
+        ("pack-architect", "on_demand", 20),
+        ("pack-developer", "on_demand", 25),
+        ("github-mcp", "on_demand", 40),
+        ("context7-mcp", "on_demand", 40),
+        ("filesystem-mcp", "on_demand", 45),
+        ("playwright-mcp", "on_demand", 60),
+    ],
+    "software-developer": [
+        ("ai-memory-bridge", "required", 10),
+        ("ai-memory-codebase", "required", 10),
+        ("pack-shared", "on_demand", 20),
+        ("pack-developer", "on_demand", 20),
+        ("github-mcp", "on_demand", 40),
+        ("context7-mcp", "on_demand", 40),
+        ("filesystem-mcp", "on_demand", 45),
+        ("chrome-devtools-mcp", "on_demand", 60),
+        ("playwright-mcp", "on_demand", 60),
+    ],
+}
+
+HEAVY_ON_DEMAND_SERVERS = frozenset({"playwright-mcp", "chrome-devtools-mcp", "blender-mcp"})
+
+
+def _compute_business_mcp_stats(rows: list[Any]) -> dict[str, int]:
+    """Honest, strict breakdown separating real MCP Servers from Local Tool Packs.
+    Never counts local_tool packs as online MCP Servers; never equates Registered with Connected.
+    """
+    bound_total = len(rows)
+    mcp_online = 0
+    mcp_offline = 0
+    mcp_pending_approval = 0
+    mcp_not_installed = 0
+    mcp_unconfigured = 0
+    mcp_disabled = 0
+    local_packs_ready = 0
+    local_packs_total = 0
+
+    for x in rows:
+        transport = x["adapter_transport"] or x["transport"] or ""
+        is_local_pack = transport == "local_tool"
+        if is_local_pack:
+            local_packs_total += 1
+        bind_enabled = bool(x["bind_enabled"])
+        srv_enabled = bool(x["server_enabled"])
+        srv_archived = bool(x["server_archived"])
+        approval = str(x["approval_state"] or "")
+        health = str(x["health_status"] or "unknown")
+
+        if not bind_enabled or not srv_enabled or srv_archived or approval == "revoked":
+            mcp_disabled += 1
+            continue
+        if approval in ("pending", "pending_approval") or health == "pending_approval":
+            mcp_pending_approval += 1
+            continue
+        if is_local_pack:
+            if approval == "approved" and health == "ready":
+                local_packs_ready += 1
+            elif health in ("offline", "timeout", "auth_failed", "down"):
+                mcp_offline += 1
+            else:
+                mcp_unconfigured += 1
+            continue
+        # Real MCP Server (stdio / streamable_http / native_cli / rest_api)
+        if approval == "approved" and health == "ready":
+            mcp_online += 1
+        elif health in ("offline", "timeout", "auth_failed", "down"):
+            mcp_offline += 1
+        elif health in ("not_installed", "unsupported"):
+            mcp_not_installed += 1
+        else:
+            mcp_unconfigured += 1
+
+    return {
+        "mcp_bound_total": bound_total,
+        "mcp_configured_count": bound_total,
+        "mcp_online_count": mcp_online,
+        "mcp_offline_count": mcp_offline,
+        "mcp_pending_approval_count": mcp_pending_approval,
+        "mcp_not_installed_count": mcp_not_installed,
+        "mcp_unconfigured_count": mcp_unconfigured,
+        "mcp_disabled_count": mcp_disabled,
+        "local_packs_ready_count": local_packs_ready,
+        "local_packs_total": local_packs_total,
+    }
+
 
 class V31BusinessService:
     """Manages Business Workspaces, templates, versioning, project/MCP/tool bindings, and Asset Registry."""
@@ -211,6 +316,83 @@ class V31BusinessService:
                     (now,),
                 )
         self._initialized = True
+        self.sync_default_business_bindings()
+
+    def sync_default_business_bindings(self) -> dict[str, Any]:
+        """Idempotently seed default business->MCP bindings for registered servers.
+        - Never creates duplicate bindings.
+        - Never overwrites user customizations or manual unbinds (tracked via v31_business_meta).
+        - Never auto-approves pending_approval servers.
+        - Enforces activation_policy='on_demand' for heavy local tools (16GB RAM optimization).
+        """
+        now = utc_now_iso()
+        added: list[dict[str, str]] = []
+        skipped_existing = 0
+        missing_servers: list[str] = []
+        with self.db.write_tx() as conn:
+            biz_by_slug = {
+                (r["slug"] or r["template_key"] or "").lower(): r["id"]
+                for r in conn.execute(
+                    "SELECT id, slug, template_key FROM v31_business_profiles WHERE archived = 0"
+                ).fetchall()
+            }
+            srv_by_name = {
+                r["name"]: r["id"]
+                for r in conn.execute("SELECT id, name FROM v3_mcp_servers").fetchall()
+            }
+            # Enforce on_demand for heavy tools (Playwright, Chrome DevTools, Blender)
+            for hname in HEAVY_ON_DEMAND_SERVERS:
+                hsid = srv_by_name.get(hname)
+                if hsid:
+                    conn.execute(
+                        "UPDATE v31_mcp_server_ext SET activation_policy = 'on_demand', updated_at = ? WHERE server_id = ? AND activation_policy != 'on_demand'",
+                        (now, hsid),
+                    )
+            for slug, entries in DEFAULT_BUSINESS_MCP_BINDINGS.items():
+                bid = biz_by_slug.get(slug)
+                if not bid:
+                    continue
+                for srv_name, act_mode, prio in entries:
+                    sid = srv_by_name.get(srv_name)
+                    if not sid:
+                        if srv_name not in missing_servers:
+                            missing_servers.append(srv_name)
+                        continue
+                    meta_key = f"default_bind_seeded:{slug}:{srv_name}"
+                    already_seeded = conn.execute(
+                        "SELECT 1 FROM v31_business_meta WHERE key = ?",
+                        (meta_key,),
+                    ).fetchone()
+                    if already_seeded:
+                        skipped_existing += 1
+                        continue
+                    cur = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO v31_business_mcp_bindings (
+                            business_id, server_id, enabled, required, priority, activation_mode, config_json, created_at, updated_at
+                        ) VALUES (?, ?, 1, ?, ?, ?, '{}', ?, ?)
+                        """,
+                        (bid, sid, 1 if act_mode == "required" else 0, prio, act_mode, now, now),
+                    )
+                    if cur.rowcount == 0:
+                        # Update activation_mode on existing builtin binding only on first seed
+                        conn.execute(
+                            "UPDATE v31_business_mcp_bindings SET activation_mode = ?, required = ?, updated_at = ? WHERE business_id = ? AND server_id = ?",
+                            (act_mode, 1 if act_mode == "required" else 0, now, bid, sid),
+                        )
+                    else:
+                        added.append({"business_slug": slug, "server_name": srv_name, "activation_mode": act_mode})
+                    conn.execute(
+                        "INSERT OR REPLACE INTO v31_business_meta (key, value, updated_at) VALUES (?, '1', ?)",
+                        (meta_key, now),
+                    )
+        return {
+            "synced": True,
+            "added_count": len(added),
+            "added": added,
+            "skipped_already_seeded": skipped_existing,
+            "missing_unregistered_servers": sorted(missing_servers),
+        }
 
     def _build_snapshot(self, conn: Any, business_id: str) -> dict[str, Any]:
         row = conn.execute("SELECT * FROM v31_business_profiles WHERE id = ?", (business_id,)).fetchone()
@@ -311,16 +493,18 @@ class V31BusinessService:
                 proj_cnt = conn.execute("SELECT COUNT(*) FROM v31_business_projects WHERE business_id = ?", (bid,)).fetchone()[0]
                 mcp_rows = conn.execute(
                     """
-                    SELECT m.enabled AS bind_enabled, s.health_status, s.approval_state
+                    SELECT m.enabled AS bind_enabled, s.transport, s.health_status, s.approval_state,
+                           COALESCE(ext.adapter_transport, s.transport) AS adapter_transport,
+                           COALESCE(ext.enabled, 1) AS server_enabled,
+                           COALESCE(ext.archived, 0) AS server_archived
                     FROM v31_business_mcp_bindings m
                     JOIN v3_mcp_servers s ON s.id = m.server_id
+                    LEFT JOIN v31_mcp_server_ext ext ON ext.server_id = s.id
                     WHERE m.business_id = ?
                     """,
                     (bid,),
                 ).fetchall()
-                mcp_cfg = len(mcp_rows)
-                mcp_online = sum(1 for x in mcp_rows if x["bind_enabled"] and x["health_status"] == "ready" and x["approval_state"] == "approved")
-                mcp_offline = sum(1 for x in mcp_rows if x["bind_enabled"] and x["health_status"] in ("offline", "timeout", "auth_failed", "down"))
+                stats = _compute_business_mcp_stats(mcp_rows)
                 model_pol = json.loads(r["model_policy_json"] or "{}")
                 items.append(
                     {
@@ -335,9 +519,7 @@ class V31BusinessService:
                         "template_key": r["template_key"],
                         "default_model": model_pol.get("default_model") or "Chưa đặt",
                         "project_count": proj_cnt,
-                        "mcp_configured_count": mcp_cfg,
-                        "mcp_online_count": mcp_online,
-                        "mcp_offline_count": mcp_offline,
+                        **stats,
                         "created_at": r["created_at"],
                         "updated_at": r["updated_at"],
                     }
@@ -365,9 +547,18 @@ class V31BusinessService:
             ]
             bindings_raw = conn.execute(
                 """
-                SELECT bm.*, s.name AS server_name, s.transport, s.health_status, s.approval_state, s.trust_tier,
+                SELECT bm.*, bm.enabled AS bind_enabled,
+                       s.name AS server_name, s.transport, s.health_status, s.approval_state, s.trust_tier,
+                       s.last_checked_at, s.last_latency_ms,
                        COALESCE(ext.adapter_transport, s.transport) AS adapter_transport,
-                       COALESCE(ext.enabled, 1) AS server_enabled
+                       COALESCE(ext.enabled, 1) AS server_enabled,
+                       COALESCE(ext.archived, 0) AS server_archived,
+                       COALESCE(ext.activation_policy, 'on_demand') AS server_activation_policy,
+                       COALESCE(ext.ram_limit_mb, 512) AS ram_limit_mb,
+                       COALESCE(ext.invocation_count, 0) AS invocation_count,
+                       COALESCE(ext.success_count, 0) AS success_count,
+                       COALESCE(ext.failure_count, 0) AS failure_count,
+                       ext.last_error_code, ext.last_error_message
                 FROM v31_business_mcp_bindings bm
                 JOIN v3_mcp_servers s ON s.id = bm.server_id
                 LEFT JOIN v31_mcp_server_ext ext ON ext.server_id = s.id
@@ -376,6 +567,15 @@ class V31BusinessService:
                 """,
                 (business_id,),
             ).fetchall()
+            mcp_stats = _compute_business_mcp_stats(bindings_raw)
+            cat_meta = {
+                r["catalog_key"]: {
+                    "auth_requirements": json.loads(r["auth_requirements_json"] or "[]"),
+                    "resource_estimate": r["resource_estimate"] or "",
+                    "risk_level": r["risk_level"] or "low",
+                }
+                for r in conn.execute("SELECT catalog_key, auth_requirements_json, resource_estimate, risk_level FROM mcp321_catalog_entries").fetchall()
+            }
             tool_policies_map = {
                 r["tool_id"]: r["policy"]
                 for r in conn.execute("SELECT tool_id, policy FROM v31_business_tools WHERE business_id = ?", (business_id,)).fetchall()
@@ -399,10 +599,13 @@ class V31BusinessService:
                             "policy": tool_policies_map.get(t["id"], "deny"),  # default-deny when unset
                         }
                     )
+                cm = cat_meta.get(b["server_name"], {})
+                act_mode = b["activation_mode"] if "activation_mode" in b.keys() and b["activation_mode"] else ("required" if b["required"] else "on_demand")
                 bindings.append(
                     {
                         "server_id": b["server_id"],
                         "server_name": b["server_name"],
+                        "server_kind": "local_tool_pack" if b["adapter_transport"] == "local_tool" else "mcp_server",
                         "transport": b["adapter_transport"],
                         "health_status": b["health_status"],
                         "approval_state": b["approval_state"],
@@ -410,7 +613,22 @@ class V31BusinessService:
                         "server_enabled": bool(b["server_enabled"]),
                         "enabled": bool(b["enabled"]),
                         "required": bool(b["required"]),
+                        "activation_mode": act_mode,
                         "priority": b["priority"],
+                        "server_activation_policy": b["server_activation_policy"],
+                        "ram_limit_mb": b["ram_limit_mb"],
+                        "auth_requirements": cm.get("auth_requirements", []),
+                        "resource_estimate": cm.get("resource_estimate", ""),
+                        "risk_level": cm.get("risk_level", "low"),
+                        "last_checked_at": b["last_checked_at"],
+                        "last_latency_ms": b["last_latency_ms"],
+                        "last_error_code": b["last_error_code"],
+                        "last_error_message": b["last_error_message"],
+                        "metrics": {
+                            "invocation_count": int(b["invocation_count"] or 0),
+                            "success_count": int(b["success_count"] or 0),
+                            "failure_count": int(b["failure_count"] or 0),
+                        },
                         "config": json.loads(b["config_json"] or "{}"),
                         "tools": tools_out,
                     }
@@ -445,6 +663,7 @@ class V31BusinessService:
                 "workflow_policy": json.loads(row["workflow_policy_json"] or "{}"),
                 "resource_policy": json.loads(row["resource_policy_json"] or "{}"),
                 "projects": projects,
+                "mcp_stats": mcp_stats,
                 "mcp_bindings": bindings,
                 "active_sessions": active_sessions,
                 "version_count": ver_count,
@@ -794,19 +1013,22 @@ class V31BusinessService:
                 raise BridgeError(404, "business_not_found", "Business workspace not found.")
             if not conn.execute("SELECT 1 FROM v3_mcp_servers WHERE id = ?", (req.server_id,)).fetchone():
                 raise BridgeError(404, "mcp_server_not_found", "MCP server not found.")
+            act_mode = req.activation_mode or ("required" if req.required else "on_demand")
+            is_req = 1 if (req.required or act_mode == "required") else 0
             conn.execute(
                 """
                 INSERT INTO v31_business_mcp_bindings (
-                    business_id, server_id, enabled, required, priority, config_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    business_id, server_id, enabled, required, priority, activation_mode, config_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(business_id, server_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     required = excluded.required,
                     priority = excluded.priority,
+                    activation_mode = excluded.activation_mode,
                     config_json = excluded.config_json,
                     updated_at = excluded.updated_at
                 """,
-                (business_id, req.server_id, 1 if req.enabled else 0, 1 if req.required else 0, req.priority, json.dumps(req.config, ensure_ascii=False), now, now),
+                (business_id, req.server_id, 1 if req.enabled else 0, is_req, req.priority, act_mode, json.dumps(req.config, ensure_ascii=False), now, now),
             )
             self._bump_revision(conn, business_id, now)
         return self.get_business_detail(business_id)

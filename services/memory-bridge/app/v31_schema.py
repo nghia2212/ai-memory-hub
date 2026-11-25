@@ -241,6 +241,7 @@ class BusinessMcpBindRequest(StrictV31Model):
     enabled: bool = True
     required: bool = False
     priority: int = Field(default=100, ge=1, le=1000)
+    activation_mode: Literal["required", "on_demand", "manual"] = "on_demand"
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -332,7 +333,8 @@ class McpBusinessRouteRequest(StrictV31Model):
     business_id: str = Field(min_length=1, max_length=64)
     task_id: str | None = Field(default=None, max_length=128)
     session_id: UUID | None = None
-    required_capabilities: list[str] = Field(min_length=1, max_length=25)
+    task_objective: str | None = Field(default=None, max_length=2000)
+    required_capabilities: list[str] = Field(default_factory=list, max_length=25)
     allow_write: bool = False
     routing_mode: Literal["automatic", "manual"] = "automatic"
     include_server_ids: list[str] = Field(default_factory=list, max_length=20)

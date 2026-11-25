@@ -273,6 +273,32 @@ def create_trace_router(db, cfg):
                     it["task_link_label"] = "Chưa liên kết nhiệm vụ"
             unlinked_count = conn.execute("SELECT COUNT(*) FROM v22_execution_traces WHERE project_id=? AND task_id IS NULL AND plan_id IS NULL", (project,)).fetchone()[0]
             groups = build_group_summaries(enriched_sample)
+            # P10: Attach scoped Skill Run telemetry (selected/delivered/loaded/executed/blocked/unknown)
+            sr_clauses = ["sr.project_id = ?"]
+            sr_args = [project]
+            if plan_id:
+                sr_clauses.append("sr.plan_id = ?")
+                sr_args.append(str(plan_id))
+            if task_id:
+                sr_clauses.append("sr.task_id = ?")
+                sr_args.append(str(task_id))
+            if session_id:
+                sr_clauses.append("sr.session_id = ?")
+                sr_args.append(str(session_id))
+            skill_runs = [
+                dict(r)
+                for r in conn.execute(
+                    f"""
+                    SELECT sr.id, sr.skill_id, s.slug, s.title, sr.version_str, sr.content_hash,
+                           sr.adapter, sr.status, sr.selection_reason, sr.bytes_count, sr.measurement_kind, sr.created_at
+                    FROM sk32_skill_runs sr
+                    LEFT JOIN sk32_skills s ON s.id = sr.skill_id
+                    WHERE {' AND '.join(sr_clauses)}
+                    ORDER BY sr.created_at DESC LIMIT 30
+                    """,
+                    sr_args,
+                ).fetchall()
+            ]
             return {
                 "items": items,
                 "total": total,
@@ -281,6 +307,7 @@ def create_trace_router(db, cfg):
                 "summary": summary,
                 "groups": groups,
                 "planned_steps": planned_steps,
+                "skill_runs": skill_runs,
                 "scope": {
                     "project_id": project,
                     "worktree_id": str(worktree_id) if worktree_id else None,

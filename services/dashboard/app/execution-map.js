@@ -41,7 +41,7 @@
     unknown: "Unknown",
   };
 
-  let rows = [], plannedSteps = [], groups = [], summary = {}, metrics = {};
+  let rows = [], plannedSteps = [], groups = [], summary = {}, metrics = {}, skillRuns = [];
   let offset = 0, next = null, total = 0, epoch = 0, busy = false, lastFingerprint = "";
   let selectedId = null, selectedRow = null, detailTab = "overview";
   let zoom = 1.0, compactMode = false, hideEmptyLanes = true, detailOpen = true;
@@ -456,8 +456,10 @@
       ["Input token", metrics.input_tokens],
       ["Output token", metrics.output_tokens],
       ["Cache read", metrics.cache_read_tokens],
-      ["Reasoning", metrics.reasoning_tokens],
-      ["USD đo được", metrics.cost_usd],
+      ["Known Subtotal", metrics.known_token_subtotal],
+      ["Reasoning (tách riêng)", metrics.reasoning_tokens],
+      [`Cost USD (${metrics.cost_kind || "unavailable"})`, metrics.estimated_cost_usd ?? metrics.cost_usd],
+      ["Skill Runs (P10)", skillRuns.length],
       ["Wall span (ms)", metrics.wall_span_ms],
       ["Interval union (ms)", metrics.observed_union_ms],
       ["Sum step (ms)", metrics.summed_step_ms],
@@ -467,7 +469,7 @@
       b.append(el("small", k), el("strong", unknown(v)));
       target.append(b);
     }
-    target.append(el("p", "Chỉ số theo bộ lọc" + (metrics.partial ? " (giới hạn 5.000 step)" : "") + ". Không cộng trùng session_usage với llm_call đã liên kết; không dùng tổng step song song làm wall-clock.", "trace-metric-note"));
+    target.append(el("p", `Chỉ số theo bộ lọc${metrics.partial ? " (giới hạn 5.000 step)" : ""} · Bảng giá: ${metrics.pricing_table_version || "—"}. Không cộng trùng session_usage với llm_call đã liên kết; không cộng trùng Reasoning/MCP/Skill subset vào tổng Input; trường chưa đo được hiển thị Unknown (không gán 0).`, "trace-metric-note"));
   }
 
   function renderGraph(target) {
@@ -791,6 +793,7 @@
       summary = data.summary || {};
       groups = data.groups || [];
       plannedSteps = data.planned_steps || [];
+      skillRuns = data.skill_runs || [];
       if (fp !== lastFingerprint || reset) {
         lastFingerprint = fp;
         render();

@@ -15,6 +15,7 @@ from .v31_schema import McpGatewayServerCreateRequest
 from .v321_schema import (
     CatalogRegisterRequest,
     ExternalPlanIngestRequest,
+    ProjectMcpOverrideRequest,
     SessionToMonitoringPlanRequest,
     TraceAssociationRequest,
 )
@@ -223,9 +224,10 @@ def _rev_hash(payload: dict[str, Any]) -> str:
 class V321Mcp321Service:
     """Manages MCP Candidate Catalog (separate from registered servers) & External Plan Sync (monitor-only)."""
 
-    def __init__(self, db: DatabaseManager, gateway: V31McpGatewayService) -> None:
+    def __init__(self, db: DatabaseManager, gateway: V31McpGatewayService, *, biz_service: Any = None) -> None:
         self.db = db
         self.gateway = gateway
+        self.biz_service = biz_service
         self._seeded = False
 
     def ensure_catalog_seeded(self) -> None:
@@ -373,7 +375,10 @@ class V321Mcp321Service:
             health = self.gateway.check_server_health(sid, actor=actor)
             if transport == "local_tool" and health["health_status"] == "ready":
                 discovery = self.gateway.discover_server_tools(sid, actor=actor)
-        return {"registered": True, "server": created, "health": health, "discovery": discovery}
+        binding_sync = None
+        if self.biz_service is not None:
+            binding_sync = self.biz_service.sync_default_business_bindings()
+        return {"registered": True, "server": created, "health": health, "discovery": discovery, "binding_sync": binding_sync}
 
     # --- P8: External Plan & Task Synchronization (Monitor-Only) ---
     def ingest_external_plan(self, req: ExternalPlanIngestRequest, actor: str = "collector") -> dict[str, Any]:
@@ -555,3 +560,160 @@ class V321Mcp321Service:
                 (aid, pid, req.external_plan_id, req.external_task_id, str(req.trace_id) if req.trace_id else None, str(req.session_id) if req.session_id else None, actor, req.evidence_note, now),
             )
         return {"id": aid, "external_plan_id": req.external_plan_id, "linked": True}
+
+    # --- Project-Level MCP Overrides (inherit business MCPs, restrict/disable, never escalate) ---
+    def list_project_mcp_overrides(self, project_id: str, business_id: str) -> dict[str, Any]:
+        with self.db.read_conn() as conn:
+            if not conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
+                raise BridgeError(404, "project_not_found", "Project not found.")
+            if not conn.execute("SELECT 1 FROM v31_business_profiles WHERE id = ?", (business_id,)).fetchone():
+                raise BridgeError(404, "business_not_found", "Business workspace not found.")
+            linked = conn.execute(
+                "SELECT 1 FROM v31_business_projects WHERE business_id = ? AND project_id = ?",
+                (business_id, project_id),
+            ).fetchone()
+            bindings = conn.execute(
+                """
+                SELECT bm.server_id, bm.enabled AS business_enabled, bm.priority AS business_priority,
+                       COALESCE(bm.activation_mode, 'on_demand') AS activation_mode,
+                       s.name AS server_name, s.approval_state, s.health_status,
+                       COALESCE(ext.adapter_transport, s.transport) AS transport
+                FROM v31_business_mcp_bindings bm
+                JOIN v3_mcp_servers s ON s.id = bm.server_id
+                LEFT JOIN v31_mcp_server_ext ext ON ext.server_id = s.id
+                WHERE bm.business_id = ?
+                ORDER BY bm.priority ASC, s.name ASC
+                """,
+                (business_id,),
+            ).fetchall()
+            ovr_map = {
+                r["server_id"]: {"mode": r["mode"], "priority": r["priority"], "updated_at": r["updated_at"]}
+                for r in conn.execute(
+                    "SELECT server_id, mode, priority, updated_at FROM mcp321_project_mcp_overrides WHERE project_id = ? AND business_id = ?",
+                    (project_id, business_id),
+                ).fetchall()
+            }
+            items = []
+            for b in bindings:
+                ovr = ovr_map.get(b["server_id"])
+                mode = ovr["mode"] if ovr else "inherit"
+                eff_enabled = bool(b["business_enabled"]) and (mode != "disabled")
+                items.append(
+                    {
+                        "server_id": b["server_id"],
+                        "server_name": b["server_name"],
+                        "server_kind": "local_tool_pack" if b["transport"] == "local_tool" else "mcp_server",
+                        "transport": b["transport"],
+                        "approval_state": b["approval_state"],
+                        "health_status": b["health_status"],
+                        "activation_mode": b["activation_mode"],
+                        "business_enabled": bool(b["business_enabled"]),
+                        "override_mode": mode,
+                        "effective_enabled": eff_enabled,
+                        "effective_priority": ovr["priority"] if (ovr and ovr["priority"] is not None) else b["business_priority"],
+                        "updated_at": ovr["updated_at"] if ovr else None,
+                    }
+                )
+            return {"project_id": project_id, "business_id": business_id, "project_linked_to_business": linked is not None, "items": items}
+
+    def set_project_mcp_override(self, project_id: str, req: ProjectMcpOverrideRequest) -> dict[str, Any]:
+        """Project may inherit or disable a business-bound MCP; NEVER escalate unbound/disabled business MCPs."""
+        now = utc_now_iso()
+        with self.db.write_tx() as conn:
+            if not conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
+                raise BridgeError(404, "project_not_found", "Project not found.")
+            bind = conn.execute(
+                "SELECT bm.enabled, s.approval_state FROM v31_business_mcp_bindings bm JOIN v3_mcp_servers s ON s.id = bm.server_id WHERE bm.business_id = ? AND bm.server_id = ?",
+                (req.business_id, req.server_id),
+            ).fetchone()
+            if not bind:
+                raise BridgeError(403, "project_override_cannot_escalate", "Project override cannot bind or escalate a server not bound to the business workspace.")
+            if req.mode == "enabled" and (not bind["enabled"] or bind["approval_state"] != "approved"):
+                raise BridgeError(403, "project_override_cannot_escalate", "Project override cannot enable an unapproved or business-disabled MCP server.")
+            if req.mode == "inherit" and req.priority is None:
+                conn.execute(
+                    "DELETE FROM mcp321_project_mcp_overrides WHERE project_id = ? AND business_id = ? AND server_id = ?",
+                    (project_id, req.business_id, req.server_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO mcp321_project_mcp_overrides (project_id, business_id, server_id, mode, priority, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_id, business_id, server_id) DO UPDATE SET
+                        mode = excluded.mode,
+                        priority = excluded.priority,
+                        updated_at = excluded.updated_at
+                    """,
+                    (project_id, req.business_id, req.server_id, req.mode, req.priority, now),
+                )
+        return self.list_project_mcp_overrides(project_id, req.business_id)
+
+    # --- P9: Client Runtime Adapter Inventory (Read-Only Capability Manifest) ---
+    def get_runtime_adapters(self) -> dict[str, Any]:
+        return {
+            "managed_namespace": "ai-memory-hub-managed",
+            "write_policy": "never_overwrite_user_config_without_backup_and_explicit_apply",
+            "adapters": [
+                {
+                    "client_id": "antigravity",
+                    "display_name": "Antigravity IDE",
+                    "mcp_activation_mode": "managed_preview_and_apply",
+                    "skill_delivery_mode": "mcp_pull_and_context_pack",
+                    "external_plan_sync": "opt_in_read_only_markdown_collector",
+                    "token_telemetry_fields": ["input_tokens", "output_tokens", "cache_read_tokens"],
+                    "token_telemetry_unsupported": ["cache_write_tokens", "reasoning_tokens", "cost_usd"],
+                    "rollback_supported": True,
+                },
+                {
+                    "client_id": "claude",
+                    "display_name": "Claude Code CLI",
+                    "mcp_activation_mode": "managed_json_namespace",
+                    "skill_delivery_mode": "managed_claude_skills_dir",
+                    "external_plan_sync": "session_monitor_only",
+                    "token_telemetry_fields": ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens"],
+                    "token_telemetry_unsupported": ["subscription_billing_cost_usd"],
+                    "rollback_supported": True,
+                },
+                {
+                    "client_id": "codex",
+                    "display_name": "Codex CLI",
+                    "mcp_activation_mode": "managed_toml_block",
+                    "skill_delivery_mode": "managed_agents_skill_pack",
+                    "external_plan_sync": "session_monitor_only",
+                    "token_telemetry_fields": ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens"],
+                    "token_telemetry_unsupported": ["subscription_billing_cost_usd"],
+                    "rollback_supported": True,
+                },
+                {
+                    "client_id": "gemini",
+                    "display_name": "Gemini CLI",
+                    "mcp_activation_mode": "managed_settings_json",
+                    "skill_delivery_mode": "managed_gemini_skills_dir",
+                    "external_plan_sync": "opt_in_read_only_collector",
+                    "token_telemetry_fields": [],
+                    "token_telemetry_unsupported": ["cli_not_installed_or_unavailable"],
+                    "rollback_supported": True,
+                },
+                {
+                    "client_id": "deepseek_api",
+                    "display_name": "DeepSeek API (Optional Paid — Gated)",
+                    "mcp_activation_mode": "hub_gateway_only",
+                    "skill_delivery_mode": "context_pack_injection",
+                    "external_plan_sync": "hub_native",
+                    "token_telemetry_fields": ["input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens"],
+                    "token_telemetry_unsupported": [],
+                    "rollback_supported": True,
+                },
+                {
+                    "client_id": "qwen_local",
+                    "display_name": "Qwen Local / Ollama (0 Cost)",
+                    "mcp_activation_mode": "hub_gateway_only",
+                    "skill_delivery_mode": "context_pack_injection",
+                    "external_plan_sync": "hub_native",
+                    "token_telemetry_fields": ["input_tokens", "output_tokens"],
+                    "token_telemetry_unsupported": ["cache_read_tokens", "cache_write_tokens"],
+                    "rollback_supported": True,
+                },
+            ],
+        }

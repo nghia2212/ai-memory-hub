@@ -1271,6 +1271,27 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         require_authenticated_csrf(request, cfg)
         return await _proxy_bridge("DELETE", f"/v321/external-plans/{plan_id}", use_admin=True, params={"project_id": str(project_id)})
 
+    @app.post("/api/v321/businesses/sync-default-bindings")
+    async def api_v321_sync_default_bindings(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v321/businesses/sync-default-bindings", use_admin=True)
+
+    @app.get("/api/v321/projects/{project_id}/mcp-overrides")
+    async def api_v321_list_project_overrides(project_id: str, request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"business_id"}
+        return await _proxy_bridge("GET", f"/v321/projects/{project_id}/mcp-overrides", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.post("/api/v321/projects/{project_id}/mcp-overrides")
+    async def api_v321_set_project_override(project_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v321/projects/{project_id}/mcp-overrides", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v321/runtime-adapters")
+    async def api_v321_runtime_adapters(request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", "/v321/runtime-adapters")
+
     return app
 
 
