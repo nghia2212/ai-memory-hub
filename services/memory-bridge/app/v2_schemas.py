@@ -8,9 +8,12 @@ from uuid import UUID
 
 from pydantic import Field
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_HERE = Path(__file__).resolve()
+for _candidate in (_HERE.parents[1], *(_HERE.parents)):
+    if (_candidate / "services" / "orchestrator" / "contracts.py").is_file():
+        if str(_candidate) not in sys.path:
+            sys.path.insert(0, str(_candidate))
+        break
 
 from services.orchestrator.contracts import (  # noqa: E402
     AuthMode,

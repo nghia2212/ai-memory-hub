@@ -120,8 +120,10 @@ services:
       timeout: 3s
       retries: 3
 networks:
-  core:
-    internal: true
+  # Note: Docker Desktop on Windows/WSL2 does not publish host loopback ports
+  # for containers attached exclusively to `internal: true` networks.
+  # Loopback isolation is enforced via explicit `127.0.0.1:<port>:<port>` binds.
+  core: {}
   provider: {}
 volumes:
   code-index: {}
