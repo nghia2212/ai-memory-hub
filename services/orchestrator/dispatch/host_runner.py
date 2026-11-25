@@ -284,8 +284,8 @@ class HostRunner:
                 "project_id": project_id,
                 "lease_id": lease_id,
                 "outcome": final_outcome,
-                "accepted": rc == 0,
-                "tests_passed": rc == 0,
+                "accepted": None,
+                "tests_passed": None,
                 "handoff_summary": summary,
             },
         )

@@ -1639,7 +1639,7 @@ class V2BridgeService:
                     if r[f] is not None:
                         latest_cum[f] = r[f]
 
-        out: dict[str, Any] = {"measurement_kind": kind}
+        out: dict[str, Any] = {"measurement_kind": kind, "sources": sorted({r["source"] for r in rows}), "observed_at": max(r["observed_at"] for r in rows)}
         for f in fields:
             if f in deltas or f in latest_cum:
                 val = deltas.get(f, 0) + latest_cum.get(f, 0)
@@ -1679,10 +1679,10 @@ class V2BridgeService:
                 clauses.append("s.status = ?")
                 params.append(outcome)
             if task_type:
-                clauses.append("tf.task_type = ?")
+                clauses.append("COALESCE(tf.task_type, t.task_type) = ?")
                 params.append(task_type)
             if complexity:
-                clauses.append("tf.complexity = ?")
+                clauses.append("COALESCE(tf.complexity, t.complexity) = ?")
                 params.append(complexity)
             if from_date:
                 clauses.append("s.started_at >= ?")
@@ -1693,7 +1693,7 @@ class V2BridgeService:
 
             rows = conn.execute(
                 f"""
-                SELECT s.*, tf.task_type, tf.complexity, so.accepted, so.tests_passed, so.duration_ms,
+                SELECT s.*, COALESCE(tf.task_type, t.task_type) AS task_type, COALESCE(tf.complexity, t.complexity) AS complexity, so.accepted, so.tests_passed, so.duration_ms,
                        so.retries, so.peak_context_tokens, a.runner_id, a.status AS attempt_state,
                        a.error_code, l.heartbeat_at, l.expires_at, w.branch, t.title AS task_title
                 FROM v2_sessions s
@@ -1767,8 +1767,8 @@ class V2BridgeService:
         with self.db.write_tx() as conn:
             self._ensure_worktree(conn, pid, wid)
             sess = conn.execute(
-                "SELECT id, project_id FROM v2_sessions WHERE id = ? AND project_id = ?",
-                (sid, pid),
+                "SELECT id, project_id FROM v2_sessions WHERE id = ? AND project_id = ? AND worktree_id = ?",
+                (sid, pid, wid),
             ).fetchone()
             if not sess:
                 raise BridgeError(404, "session_not_found", "Session not found for project")
@@ -1823,6 +1823,8 @@ class V2BridgeService:
                     "input_tokens": None,
                     "output_tokens": None,
                     "cache_read_tokens": None,
+                    "cache_write_tokens": None,
+                    "reasoning_tokens": None,
                     "cost_usd": None,
                 }
                 kind = "unavailable"
@@ -1834,7 +1836,7 @@ class V2BridgeService:
                         kind = "measured"
                     elif c["measurement_kind"] == "estimated" and kind == "unavailable":
                         kind = "estimated"
-                    for f in ("input_tokens", "output_tokens", "cache_read_tokens", "cost_usd"):
+                    for f in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "cost_usd"):
                         if c[f] is not None:
                             totals[f] = (totals[f] or 0) + c[f]
                 if totals["cost_usd"] is not None:

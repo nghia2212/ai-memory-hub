@@ -133,6 +133,8 @@ def parse_cli_telemetry(
                 session_id = str(ev.get("session_id") or ev.get("thread_id"))
             if isinstance(ev.get("usage"), dict):
                 last_usage = ev["usage"]
+            if ev.get("type") == "item.completed" and isinstance(ev.get("item"), dict) and ev["item"].get("type") == "agent_message":
+                last_msg = str(ev["item"].get("text") or "")
             if ev.get("type") in {"turn.completed", "message"} and ev.get("content"):
                 last_msg = str(ev["content"])
         has_any = any(
@@ -142,7 +144,7 @@ def parse_cli_telemetry(
             input_tokens=_opt_int(last_usage.get("input_tokens")),
             output_tokens=_opt_int(last_usage.get("output_tokens")),
             cache_read_tokens=_opt_int(
-                last_usage.get("cache_read_tokens") or last_usage.get("cached_input_tokens")
+                last_usage.get("cache_read_tokens", last_usage.get("cached_input_tokens"))
             ),
             cache_write_tokens=_opt_int(last_usage.get("cache_write_tokens")),
             reasoning_tokens=_opt_int(last_usage.get("reasoning_tokens")),
@@ -152,7 +154,7 @@ def parse_cli_telemetry(
             source="codex_exec_json",
             observed_at=now,
         )
-        return counters, session_id, redact_summary(last_msg or raw)
+        return counters, session_id, redact_summary(last_msg or "Structured Codex output received.")
 
     try:
         data = json.loads(raw)
@@ -176,8 +178,8 @@ def parse_cli_telemetry(
     counters = TokenUsageCounters(
         input_tokens=_opt_int(usage.get("input_tokens")),
         output_tokens=_opt_int(usage.get("output_tokens")),
-        cache_read_tokens=_opt_int(usage.get("cache_read_tokens") or usage.get("cache_read_input_tokens")),
-        cache_write_tokens=_opt_int(usage.get("cache_write_tokens") or usage.get("cache_creation_input_tokens")),
+        cache_read_tokens=_opt_int(usage.get("cache_read_tokens", usage.get("cache_read_input_tokens"))),
+        cache_write_tokens=_opt_int(usage.get("cache_write_tokens", usage.get("cache_creation_input_tokens"))),
         reasoning_tokens=_opt_int(usage.get("reasoning_tokens")),
         cost_usd=_opt_float(cost_val),
         measurement_kind="measured" if has_any else "unavailable",
@@ -185,7 +187,7 @@ def parse_cli_telemetry(
         source=f"{cli_family}_json",
         observed_at=now,
     )
-    summary = str(data.get("result") or data.get("output") or data.get("message") or raw)
+    summary = str(data.get("result") or data.get("output") or data.get("message") or "Structured CLI output received.")
     return counters, session_id, redact_summary(summary)
 
 

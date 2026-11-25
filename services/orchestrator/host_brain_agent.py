@@ -26,6 +26,10 @@ from typing import Any
 
 HUB_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = HUB_ROOT / ".env"
+# The Windows launcher historically invokes this file directly.
+if str(HUB_ROOT) not in sys.path:
+    sys.path.insert(0, str(HUB_ROOT))
+
 
 KNOWN_CATALOG_MODELS: list[dict[str, Any]] = [
     {
@@ -513,11 +517,11 @@ def execute_approved_plan(
         elif provider == "local" or model_id == "deterministic-rules":
             rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
         elif provider == "claude":
-            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--model", model_id, prompt], cwd=cwd, timeout=90)
+            rc, out, err = _run_cmd(["claude", "-p", "--tools", "", "--output-format", "json", "--model", model_id, prompt], cwd=cwd, timeout=90)
         elif provider == "codex":
-            rc, out, err = _run_cmd(["codex", "exec", "--sandbox", "read-only", "--model", model_id, prompt], cwd=cwd, timeout=90)
+            rc, out, err = _run_cmd(["codex", "exec", "--json", "--sandbox", "read-only", "--model", model_id, prompt], cwd=cwd, timeout=90)
         elif provider == "agy" and auth_mode == "subscription_cli":
-            rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--print", prompt], cwd=cwd, timeout=90)
+            rc, out, err = _run_cmd(["agy", "--mode", "plan", "--model", model_id, "--output-format", "json", "--print", prompt], cwd=cwd, timeout=90)
         else:
             rc, out, err = 1, "", "Unsupported approved CLI adapter"
     finally:
@@ -527,7 +531,25 @@ def execute_approved_plan(
     duration_ms = int((time.perf_counter() - t0) * 1000)
     quota_error = re.search(r"(?i)(?:quota exceeded|rate.limit exceeded|resource.exhausted|quota will reset)", (err or out)[:2000])
     succeeded = rc == 0 and bool(out) and not quota_error
-    summary = (out or err or "No output")[:3500]
+    # Use the same parser as the polling runner. A telemetry failure must
+    # not trigger another CLI invocation or prevent lease completion.
+    usage_status = None
+    summary = "No structured result available."
+    try:
+        from services.orchestrator.dispatch.cli_runner import parse_cli_telemetry, redact_summary
+        counters, _, summary = parse_cli_telemetry(cli_family=str(provider), stdout=out)
+        if not summary:
+            summary = redact_summary(err or "No output")
+        if session_id:
+            usage_status, _ = _bridge_request(
+                env, "POST", "/v2/usage", token_key="BRIDGE_RUNNER_TOKEN",
+                body={"source_event_id": f"{session_id}:final", "session_id": session_id,
+                      "project_id": project_id, "worktree_id": worktree_id,
+                      "sequence_no": 1, "usage": counters.model_dump(mode="json")},
+            )
+    except Exception:
+        usage_status = 503
+
 
     # Complete job on Memory Bridge (Bridge updates task, session & plan status atomically)
     cc, comp_resp = _bridge_request(
@@ -544,7 +566,7 @@ def execute_approved_plan(
             "duration_ms": duration_ms,
             "handoff_summary": summary,
             "error_code": None if succeeded else ("quota_exceeded" if quota_error else f"cli_exit_{rc}"),
-            "error_summary": None if succeeded else (err[:500] or f"Exit code {rc}"),
+            "error_summary": None if succeeded else f"Exit code {rc}",
         },
     )
 
@@ -558,6 +580,7 @@ def execute_approved_plan(
         "exit_code": rc,
         "message": "Kết quả đã lưu trong lịch sử" if cc == 200 else "Chưa xác nhận lưu kết quả",
         "complete_response": comp_resp,
+        "telemetry_status": usage_status,
     }
 
 
