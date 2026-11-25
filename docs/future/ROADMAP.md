@@ -1,0 +1,21 @@
+# Roadmap AI Memory Hub V3.3–V4.0
+Ngày: 2026-11-25. Trạng thái: PLANNED. Không phải xác nhận triển khai.
+Nguồn kế thừa: docs/v32/IMPLEMENTATION-PLAN.md (SK32, gồm P6A). V3.1 đang được Gemini triển khai theo thông tin người dùng.
+Các số phiên bản dưới đây là release sản phẩm mới, không trùng milestone Conversation History cũ: EX33, KQ34, OPS35, DIST40.
+## Thứ tự bắt buộc
+V3.1 accepted -> SK32 accepted -> EX33 -> KQ34 -> OPS35 -> DIST40. Không tự động bắt đầu release sau, không thay đổi nhánh đang chạy. Mỗi release tạo branch từ HEAD đã nghiệm thu của release trước, cherry-pick/copy tài liệu kế hoạch nếu chưa có, ghi SHA và mở draft PR về nhánh tích hợp được duyệt. Không dùng HEAD của nhánh thiết kế làm baseline runtime. Không merge main/deploy hoặc upgrade live nếu chưa được phép.
+| Release | Scope | Plan | Gate |
+|---|---|---|---|
+| V3.3 EX33 | Adaptive execution & model continuity | [Plan](V33-EX33.md) | Fast/Standard/Advanced, real cross-client handoff, policy and budget |
+| V3.4 KQ34 | Knowledge quality | [Plan](V34-KQ34.md) | Requirement traceability, staleness, skill quality, regression |
+| V3.5 OPS35 | Self-managing platform | [Plan](V35-OPS35.md) | Health, compatibility, resource profiles, tested restore |
+| V4.0 DIST40 | Distributed workspace | [Plan](V40-DIST40.md) | Authenticated remote runners, device routing, interruption recovery |
+## Common P0 and release gate (applies to every plan)
+- Read AGENTS.md, actual schema/API, previous release STATUS, tests and user acceptance. Record baseline SHA, clean/dirty worktree, actual service/client versions and known failures; unresolved security/data-loss issues block release. Register real Hub project/worktree/session/root trace and search verified memory/code before editing (V3 M0); no fake telemetry. External IDE session explicitly registered where runner unsupported. No competing dispatch.
+- Lead freezes contracts and dependency DAG; A backend/data, B UI/QA, C adapters/runner, D knowledge/security/benchmarks as assigned in each plan. Separate worktrees/branches and draft PRs, no shared write scope. Respect revision/hash, leases, permissions, budget and approvals. One DB writer, additive migrations, authenticated scoped APIs, CSRF, loopback by default, bounded results, no secrets or private data in public Git.
+- Deterministic-first; no external LLM on lookup, routing or aggregation. No paid tests by default. Capture actual provider/client metrics only; unknown != zero. No arbitrary shell or tool permission escalation from imported content. Data policy evaluated before any outbound request; restricted data denied unless organization-approved environment and authorization. Existing controls must not regress.
+- Each milestone: report exact commands/results, commit, evidence, real IDs, limitations and next step in release STATUS.md and scoped handoff. Candidate memory only until verified. If Hub trace unavailable, stop feature expansion and report; no fabricated IDs. Never restart live services without approval.
+- Release gate: unit/integration/browser regression of prior features; migration on copy, backup+restore, Windows Docker/host smoke, security and negative tests, real client integration where required, explicit unsupported/blocked status. Provide Test-Vxx.ps1 with visible progress, timeouts, read-only default, isolated test mode and safe upgrade/rollback; never delete volumes. User approves acceptance and next release separately; waivers recorded, no waiver for security/data-loss blockers.
+- Metrics: baseline and after on same task/model/settings when possible, measured input/output/cache, latency, cost provenance, quality and coverage. Separate estimate, subscription usage and billed cost. No invented savings. Proposed targets are not actual measurements.
+## Activation
+Give agent: "Implement only release <ID> from docs/future/<PLAN>. Read common gates in ROADMAP.md and AGENTS.md. Verify predecessor acceptance and actual baseline SHA, register Hub trace, run P0, then implement milestones in order. Push checkpoint commits and draft PR, never merge main or start next release without approval. Report blockers and exact evidence."
