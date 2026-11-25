@@ -512,44 +512,23 @@ def execute_approved_plan(
             "claim": claim,
         }
 
-    job = claim["job"]
-    task = claim["task"]
-    job_id = job["job_id"]
-    lease_id = job["lease_id"]
-    provider = task.get("assigned_provider") or "agy"
-    model_id = task.get("assigned_model_id") or "claude-sonnet-5-5-low"
-    effort = task.get("assigned_effort")
-    objective = task.get("objective") or task.get("title") or "Summarize task"
-
-    # Record running session in Memory Bridge
-    sc, sess_resp = _bridge_request(
-        env,
-        "POST",
-        "/v2/sessions",
-        token_key="BRIDGE_RUNNER_TOKEN",
-        body={
-            "project_id": project_id,
-            "worktree_id": worktree_id,
-            "plan_id": plan_id,
-            "task_id": task["id"],
-            "role": "executor",
-            "provider": provider,
-            "model_id": model_id,
-            "reasoning_effort": effort,
-            "auth_mode": task.get("auth_mode") or "subscription_cli",
-            "status": "running",
-        },
-    )
-    session_id = sess_resp.get("session_id") if sc in (200, 201) else None
+    job_id = claim.get("job_id") or claim.get("task_id")
+    lease_id = claim["lease_id"]
+    session_id = claim.get("session_id")
+    provider = claim.get("provider") or "agy"
+    model_id = claim.get("model_id") or "claude-sonnet-5-5-low"
+    effort = claim.get("effort")
+    auth_mode = claim.get("auth_mode") or "subscription_cli"
+    objective = (claim.get("context_pack") or {}).get("objective") or "Summarize task"
+    effective_wt_path = worktree_path or claim.get("worktree_path")
 
     t0 = time.perf_counter()
     prompt = (
         f"[AI Memory Hub V2 Approved Task]\n"
-        f"Task: {task.get('title')}\n"
         f"Objective: {objective}\n"
-        f"Constraint: Read-only analysis only. Reply concisely in Vietnamese (<= 6 bullet points)."
+        f"Constraint: Read-only analysis only. Reply concisely in Vietnamese (<= 4 bullet points)."
     )
-    cwd = worktree_path if (worktree_path and Path(worktree_path).is_dir()) else str(HUB_ROOT)
+    cwd = effective_wt_path if (effective_wt_path and Path(effective_wt_path).is_dir()) else str(HUB_ROOT)
     if provider == "local" or model_id == "deterministic-rules":
         rc, out, err = 0, f"[local-rules] Đã kiểm tra nhanh mục tiêu: {objective[:200]}", ""
     elif provider == "claude":
@@ -563,29 +542,7 @@ def execute_approved_plan(
     succeeded = rc == 0 and bool(out)
     summary = (out or err or "No output")[:3500]
 
-    # Update session status
-    if session_id:
-        _bridge_request(
-            env,
-            "POST",
-            "/v2/sessions",
-            token_key="BRIDGE_RUNNER_TOKEN",
-            body={
-                "session_id": session_id,
-                "project_id": project_id,
-                "worktree_id": worktree_id,
-                "plan_id": plan_id,
-                "task_id": task["id"],
-                "role": "executor",
-                "provider": provider,
-                "model_id": model_id,
-                "reasoning_effort": effort,
-                "auth_mode": task.get("auth_mode") or "subscription_cli",
-                "status": "completed" if succeeded else "failed",
-            },
-        )
-
-    # Complete job on Memory Bridge
+    # Complete job on Memory Bridge (Bridge updates task, session & plan status atomically)
     cc, comp_resp = _bridge_request(
         env,
         "POST",
@@ -614,7 +571,7 @@ def execute_approved_plan(
                 "project_id": project_id,
                 "model_id": model_id,
                 "provider": provider,
-                "auth_mode": task.get("auth_mode") or "subscription_cli",
+                "auth_mode": auth_mode,
                 "effort": effort,
                 "task_type": "routine",
                 "complexity": "S",
