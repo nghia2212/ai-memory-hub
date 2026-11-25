@@ -100,6 +100,7 @@ class CodebaseService:
         self._cbm = cbm
         self._scope_locks: dict[str, asyncio.Lock] = {}
         self._git_state_cache: dict[str, tuple[float, Any]] = {}
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
 
     async def _inspect_git_cached(
         self, cbm_project: str, root: Path, entry: WorktreeEntry, *, ttl_sec: float = 60.0, force: bool = False
@@ -210,17 +211,113 @@ class CodebaseService:
             updated_at=row["updated_at"],
         )
 
+    async def _execute_index_job(
+        self,
+        *,
+        job_id: str,
+        project_id: str,
+        worktree_id: str,
+        cbm_project: str,
+        root: Path,
+        mode: str,
+        head_commit: str,
+        dirty_fingerprint: str,
+    ) -> dict[str, Any]:
+        try:
+            res = await self._cbm.index_repository(
+                repo_path=str(root),
+                project_name=cbm_project,
+                mode=mode,
+                timeout=self._settings.index_timeout_sec,
+            )
+            nodes = int(res.get("nodes", 0))
+            edges = int(res.get("edges", 0))
+            self._store.upsert_snapshot(
+                cbm_project=cbm_project,
+                project_id=project_id,
+                worktree_id=worktree_id,
+                head_commit=head_commit,
+                dirty_fingerprint=dirty_fingerprint,
+                mode=mode,
+                nodes=nodes,
+                edges=edges,
+            )
+            updated = self._store.update_job(job_id, state="succeeded", nodes=nodes, edges=edges)
+            assert updated is not None
+            return updated
+        except (CBMClientError, asyncio.TimeoutError, Exception) as exc:
+            self._store.update_job(job_id, state="failed", error=type(exc).__name__)
+            raise
+
     @scoped
     async def trigger_index(self, req: IndexRequest) -> IndexJobResponse:
         entry = await self._require_worktree(req.project_id, req.worktree_id)
         cbm_project = cbm_project_name(req.project_id, req.worktree_id)
         root = Path(entry.container_root)
-        git_state = await self._inspect_git_cached(cbm_project, root, entry, force=True)
 
         # Deduplicate active job for the same (project_id, worktree_id)
         active = self._store.get_active_job(str(req.project_id), str(req.worktree_id))
         if active is not None:
             return self._row_to_job_response(active, deduplicated=True)
+
+        if req.background:
+            async with self._get_scope_lock(cbm_project):
+                active = self._store.get_active_job(str(req.project_id), str(req.worktree_id))
+                if active is not None:
+                    return self._row_to_job_response(active, deduplicated=True)
+
+                job_id = str(uuid.uuid4())
+                cached_entry = self._git_state_cache.get(cbm_project)
+                init_head = cached_entry[1].head_commit if cached_entry else entry.head_commit
+                init_dirty = cached_entry[1].dirty_fingerprint if cached_entry else entry.dirty_fingerprint
+                created_row = self._store.create_job(
+                    job_id=job_id,
+                    project_id=str(req.project_id),
+                    worktree_id=str(req.worktree_id),
+                    cbm_project=cbm_project,
+                    state="running",
+                    mode=req.mode,
+                    head_commit=init_head,
+                    dirty_fingerprint=init_dirty,
+                )
+
+                async def _bg_runner() -> None:
+                    try:
+                        git_state = await self._inspect_git_cached(cbm_project, root, entry, force=True)
+                        snapshot = self._store.get_snapshot(cbm_project)
+                        if (
+                            not req.force
+                            and snapshot is not None
+                            and snapshot["head_commit"] == git_state.head_commit
+                            and snapshot["dirty_fingerprint"] == git_state.dirty_fingerprint
+                        ):
+                            self._store.update_job(
+                                job_id,
+                                state="succeeded",
+                                no_op=True,
+                                nodes=snapshot["nodes"],
+                                edges=snapshot["edges"],
+                            )
+                            return
+                        await self._execute_index_job(
+                            job_id=job_id,
+                            project_id=str(req.project_id),
+                            worktree_id=str(req.worktree_id),
+                            cbm_project=cbm_project,
+                            root=root,
+                            mode=req.mode,
+                            head_commit=git_state.head_commit,
+                            dirty_fingerprint=git_state.dirty_fingerprint,
+                        )
+                    except Exception:
+                        pass
+
+                task = asyncio.create_task(_bg_runner())
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
+                return self._row_to_job_response(created_row)
+
+        git_state = await self._inspect_git_cached(cbm_project, root, entry, force=True)
 
         async with self._get_scope_lock(cbm_project):
             active = self._store.get_active_job(str(req.project_id), str(req.worktree_id))
@@ -263,32 +360,24 @@ class CodebaseService:
             )
 
             try:
-                res = await self._cbm.index_repository(
-                    repo_path=str(root),
-                    project_name=cbm_project,
-                    mode=req.mode,
-                    timeout=self._settings.index_timeout_sec,
-                )
-                nodes = int(res.get("nodes", 0))
-                edges = int(res.get("edges", 0))
-                self._store.upsert_snapshot(
-                    cbm_project=cbm_project,
+                updated = await self._execute_index_job(
+                    job_id=job_id,
                     project_id=str(req.project_id),
                     worktree_id=str(req.worktree_id),
+                    cbm_project=cbm_project,
+                    root=root,
+                    mode=req.mode,
                     head_commit=git_state.head_commit,
                     dirty_fingerprint=git_state.dirty_fingerprint,
-                    mode=req.mode,
-                    nodes=nodes,
-                    edges=edges,
                 )
-                updated = self._store.update_job(job_id, state="succeeded", nodes=nodes, edges=edges)
-                assert updated is not None
                 return self._row_to_job_response(updated)
             except (CBMClientError, asyncio.TimeoutError) as exc:
-                self._store.update_job(job_id, state="failed", error=type(exc).__name__)
                 raise HTTPException(
-                    status_code=503,
-                    detail={"code": "index_failed", "message": "Indexing backend failed"},
+                    status_code=504 if isinstance(exc, asyncio.TimeoutError) else 503,
+                    detail={
+                        "code": "index_timeout" if isinstance(exc, asyncio.TimeoutError) else "index_failed",
+                        "message": "Indexing timed out" if isinstance(exc, asyncio.TimeoutError) else "Indexing backend failed",
+                    },
                 ) from exc
 
     async def get_index_job(

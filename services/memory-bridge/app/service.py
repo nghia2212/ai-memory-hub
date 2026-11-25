@@ -1099,8 +1099,9 @@ class MemoryBridgeService:
 
         if self.settings.codebase_url:
             headers = self._codebase_headers(admin=True)
+            req_timeout = 20.0 if req.background else 60.0
             try:
-                with httpx.Client(timeout=60.0) as client:
+                with httpx.Client(timeout=req_timeout) as client:
                     resp = client.post(
                         f"{self.settings.codebase_url.rstrip('/')}/v1/index",
                         json=req.model_dump(mode="json"),
@@ -1112,6 +1113,21 @@ class MemoryBridgeService:
                         if "status" not in data and "state" in data:
                             data["status"] = data["state"]
                         return data
+                    if resp.status_code in (404, 409, 422, 504):
+                        err = resp.json().get("detail", {}) if resp.content else {}
+                        if isinstance(err, dict):
+                            raise BridgeError(
+                                resp.status_code,
+                                str(err.get("code") or "codebase_index_error"),
+                                str(err.get("message") or "Codebase Adapter rejected reindex request"),
+                            )
+                        raise BridgeError(resp.status_code, "codebase_index_error", str(err))
+            except httpx.TimeoutException as exc:
+                raise BridgeError(
+                    504,
+                    "codebase_timeout",
+                    "Codebase Adapter timed out while triggering reindex; background job may still be running.",
+                ) from exc
             except httpx.HTTPError:
                 pass
 
@@ -1154,7 +1170,7 @@ class MemoryBridgeService:
         if self.settings.codebase_url and eff_pid and eff_wid:
             headers = self._codebase_headers(admin=False)
             try:
-                with httpx.Client(timeout=5.0) as client:
+                with httpx.Client(timeout=10.0) as client:
                     resp = client.get(
                         f"{self.settings.codebase_url.rstrip('/')}/v1/index/{job_id}",
                         params={"project_id": eff_pid, "worktree_id": eff_wid},

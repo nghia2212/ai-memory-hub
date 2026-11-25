@@ -814,16 +814,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    let reindexPollTimer = null;
     async function triggerReindex() {
+      const project_id = document.getElementById("code-proj").value;
+      const worktree_id = document.getElementById("code-wt").value;
+      if (!project_id || !worktree_id) {
+        toast("Chọn dự án và worktree trước khi Reindex.");
+        return;
+      }
       try {
         const data = await apiFetch("/api/index", {
           method: "POST",
-          body: JSON.stringify({
-            project_id: document.getElementById("code-proj").value,
-            worktree_id: document.getElementById("code-wt").value
-          })
+          body: JSON.stringify({ project_id, worktree_id, background: true })
         });
-        toast("Đã gửi yêu cầu reindex: " + data.status);
+        const st = data.status || data.state || "unknown";
+        if (data.no_op) {
+          toast(`Index đã mới nhất (no-op): ${data.nodes ?? "?"} nodes / ${data.edges ?? "?"} edges.`);
+          return;
+        }
+        toast(
+          data.deduplicated
+            ? `Đang có job reindex chạy (${data.job_id?.slice(0,8)}), theo dõi tiến độ...`
+            : `Đã khởi chạy reindex bất đồng bộ (${data.job_id?.slice(0,8)}): ${st}`
+        );
+        if (st === "succeeded" || st === "failed" || !data.job_id) return;
+        if (reindexPollTimer) clearInterval(reindexPollTimer);
+        let polls = 0;
+        reindexPollTimer = setInterval(async () => {
+          polls += 1;
+          if (polls > 90) {
+            clearInterval(reindexPollTimer);
+            reindexPollTimer = null;
+            toast("Hết thời gian theo dõi tiến độ trên trình duyệt; job có thể vẫn đang chạy trên Codebase Adapter.");
+            return;
+          }
+          try {
+            const job = await apiFetch(
+              `/api/index/${encodeURIComponent(data.job_id)}?project_id=${encodeURIComponent(project_id)}&worktree_id=${encodeURIComponent(worktree_id)}`
+            );
+            const jst = job.status || job.state;
+            if (jst === "succeeded") {
+              clearInterval(reindexPollTimer);
+              reindexPollTimer = null;
+              toast(`Reindex hoàn tất: ${job.nodes ?? "?"} nodes / ${job.edges ?? "?"} edges.`);
+            } else if (jst === "failed") {
+              clearInterval(reindexPollTimer);
+              reindexPollTimer = null;
+              toast(`Reindex thất bại: ${job.error || "unknown"}`);
+            }
+          } catch (pe) {
+            clearInterval(reindexPollTimer);
+            reindexPollTimer = null;
+            toast("Lỗi kiểm tra tiến độ reindex: " + pe.message);
+          }
+        }, 2000);
       } catch (e) { toast(e.message); }
     }
 

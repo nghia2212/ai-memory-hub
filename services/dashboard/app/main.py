@@ -191,15 +191,26 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
         planner: bool = False,
         json_body: Any = None,
         params: dict[str, Any] | None = None,
+        timeout: float = 10.0,
     ) -> JSONResponse:
         token = cfg.bridge_planner_token if planner else cfg.bridge_admin_token if use_admin else cfg.bridge_read_token
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         url = f"{cfg.bridge_url.rstrip('/')}{path}"
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.request(method, url, headers=headers, json=json_body, params=params)
                 content = resp.json() if resp.content else {}
                 return JSONResponse(status_code=resp.status_code, content=content)
+        except httpx.TimeoutException:
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "error": {
+                        "code": "bridge_timeout",
+                        "message": "Memory Bridge timed out; tác vụ nền có thể vẫn đang chạy.",
+                    }
+                },
+            )
         except httpx.HTTPError:
             return JSONResponse(
                 status_code=503,
@@ -484,7 +495,25 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     @app.post("/api/index")
     async def api_index(request: Request) -> JSONResponse:
         require_authenticated_csrf(request, cfg)
-        return await _proxy_bridge("POST", "/v1/index", use_admin=True, json_body=await request.json())
+        body = await request.json()
+        if isinstance(body, dict) and "background" not in body:
+            body["background"] = True
+        return await _proxy_bridge("POST", "/v1/index", use_admin=True, json_body=body, timeout=20.0)
+
+    @app.get("/api/index/{job_id}")
+    async def api_index_status(
+        job_id: str,
+        request: Request,
+        project_id: str | None = None,
+        worktree_id: str | None = None,
+    ) -> JSONResponse:
+        _require_session(request)
+        params: dict[str, Any] = {}
+        if project_id:
+            params["project_id"] = project_id
+        if worktree_id:
+            params["worktree_id"] = worktree_id
+        return await _proxy_bridge("GET", f"/v1/index/{job_id}", params=params or None, timeout=10.0)
 
     @app.post("/api/backup")
     async def api_backup(request: Request) -> JSONResponse:

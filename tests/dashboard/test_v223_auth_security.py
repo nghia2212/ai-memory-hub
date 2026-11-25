@@ -17,6 +17,7 @@ def _materialize_path(path: str) -> str:
         .replace("{trace_id}", uid)
         .replace("{session_id}", uid)
         .replace("{memory_id}", uid)
+        .replace("{job_id}", uid)
         .replace("{task_id}", "V3-M1")
         .replace("{view}", "index")
         .replace("{action}", "approve")

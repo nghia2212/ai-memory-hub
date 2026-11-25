@@ -57,6 +57,7 @@ class IndexRequest(StrictModel):
     worktree_id: UUID
     mode: Literal["fast", "moderate", "full"] = "fast"
     force: bool = False
+    background: bool = False
 
 
 class IndexJobResponse(BaseModel):

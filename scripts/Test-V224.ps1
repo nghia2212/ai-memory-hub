@@ -122,6 +122,7 @@ try {
             'tests/dashboard/test_dashboard.py',
             'tests/dashboard/test_v2_dashboard.py',
             'tests/dashboard/test_v223_auth_security.py',
+            'tests/dashboard/test_v224_async_reindex_and_timeout.py',
             'tests/orchestrator/runner/test_host_runner.py',
             'tests/orchestrator/runner/test_v223_long_prompt_stdin.py',
             'tests/orchestrator/runner/test_v224_usage_collector.py'
