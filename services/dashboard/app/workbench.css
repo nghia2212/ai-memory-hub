@@ -26,3 +26,6 @@
 
 /* V2.2.1 compact plan layout */
 #plans-list{max-height:440px;overflow:auto}.history-item{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;min-height:40px}.plan-objective-card h3{overflow-wrap:anywhere}.plan-objective-details{margin:8px 0}.plan-objective-details summary{cursor:pointer;color:var(--accent)}.plan-objective-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;font-size:14px;font-weight:normal}#task-detail table button{white-space:nowrap;min-width:56px}#task-detail table{table-layout:auto}#task-detail textarea{min-height:100px;max-height:280px;resize:vertical}
+
+/* V2.2.2 long prompt editor */
+.prompt-tools{align-items:center;flex-wrap:wrap;margin:8px 0}.prompt-tools span{font-size:12px}#plan-objective{min-height:110px;max-height:350px;resize:vertical;white-space:pre-wrap}#plan-objective.prompt-expanded{height:65vh;max-height:75vh;min-height:260px}#plan-char-count.warn{color:#ef4444}#plan-file[hidden]{display:none}
