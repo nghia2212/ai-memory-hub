@@ -11,6 +11,7 @@ from typing import Any
 from .db import DatabaseManager, reconcile_expired_job_leases, utc_now_iso
 from .errors import BridgeError
 from .security import redact_payload
+from .trace_lifecycle import plan_created, agent_claimed, agent_heartbeat, agent_finished
 from .v2_schemas import (
     BrainConfigUpdateRequest,
     BrainRoleConfig,
@@ -887,6 +888,7 @@ class V2BridgeService:
     def create_plan(self, req: PlanCreateRequest, created_by: str = "planner") -> dict[str, Any]:
         pid = str(req.project_id)
         wid = str(req.worktree_id)
+        trace_started = utc_now_iso()
         rev_hash = self._validate_dag_and_hash(req.objective, req.tasks)
         plan_id = str(uuid.uuid4())
         rev_id = str(uuid.uuid4())
@@ -932,6 +934,8 @@ class V2BridgeService:
                 target_id=plan_id,
                 details={"revision_id": rev_id, "revision_hash": rev_hash, "task_count": len(req.tasks)},
             )
+            plan_created(conn, plan_id=plan_id, project_id=pid, worktree_id=wid,
+                         actor=created_by, started_at=trace_started, ended_at=utc_now_iso(), task_count=len(req.tasks))
         return self.get_plan(plan_id, pid)
 
     def _reconcile_expired_leases(self) -> None:
@@ -1334,6 +1338,8 @@ class V2BridgeService:
             conn.execute("UPDATE v2_tasks SET state = 'leased', updated_at = ? WHERE id = ?", (now, chosen["id"]))
             conn.execute("UPDATE v2_plans SET status = 'RUNNING', updated_at = ? WHERE id = ? AND status = 'APPROVED'", (now, chosen["plan_id"]))
 
+            agent_claimed(conn, task=chosen, attempt_id=attempt_id, session_id=session_id,
+                          runner_id=req.runner_id, started_at=now, attempt_number=attempt_number)
             return {
                 "claimed": True,
                 "job_id": chosen["id"],
@@ -1409,6 +1415,7 @@ class V2BridgeService:
                 "UPDATE v2_tasks SET state = 'running', updated_at = ? WHERE id = ? AND state = 'leased'",
                 (now, job_id),
             )
+            agent_heartbeat(conn, lease["attempt_id"], now)
         return {"job_id": job_id, "lease_id": str(req.lease_id), "lease_expires_at": expires_at}
 
     def record_job_event(self, job_id: str, req: JobEventRequest) -> dict[str, Any]:
@@ -1459,6 +1466,7 @@ class V2BridgeService:
             conn.execute("UPDATE v2_tasks SET state = 'checkpointed', updated_at = ? WHERE id = ?", (now, job_id))
             conn.execute("UPDATE v2_task_attempts SET status = 'checkpointed' WHERE id = ?", (lease["attempt_id"],))
             conn.execute("UPDATE v2_job_leases SET released_at = ? WHERE lease_id = ?", (now, str(req.lease_id)))
+            agent_finished(conn, lease["attempt_id"], "unknown", now, "checkpointed", "Checkpoint saved; final outcome not yet known")
             return {"job_id": job_id, "checkpointed": True, "parent_session_id": parent_sid}
 
     def complete_job(self, job_id: str, req: JobCompleteRequest) -> dict[str, Any]:
@@ -1527,6 +1535,8 @@ class V2BridgeService:
                 conn.execute("UPDATE v2_plans SET status = ?, updated_at = ? WHERE id = ?", (plan_status, now, lease["plan_id"]))
                 self._reconcile_plan_forecast_actuals(conn, lease["plan_id"], lease["revision_id"], now)
 
+            trace_status = req.outcome if req.outcome in ("succeeded", "failed", "cancelled") else "blocked"
+            agent_finished(conn, lease["attempt_id"], trace_status, now, req.error_code, req.error_summary)
         return {"job_id": job_id, "outcome": req.outcome, "completed_at": now}
 
     def cancel_job(self, job_id: str, project_id: str, actor: str = "admin") -> dict[str, Any]:
@@ -1548,6 +1558,8 @@ class V2BridgeService:
                 "UPDATE v2_budget_reservations SET status = 'released', settled_at = ? WHERE task_id = ? AND status = 'reserved'",
                 (now, job_id),
             )
+            for attempt in conn.execute("SELECT id FROM v2_task_attempts WHERE task_id=? AND status='cancelled' AND ended_at=?", (job_id,now)).fetchall():
+                agent_finished(conn, attempt["id"], "cancelled", now)
             self._audit(conn, project_id=project_id, actor=actor, action="job_cancelled", target_type="task", target_id=job_id)
         return {"job_id": job_id, "state": "cancelled"}
 
