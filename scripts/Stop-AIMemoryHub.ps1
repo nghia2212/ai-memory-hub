@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Coordinated safe Stop for AI Memory Hub (Docker Compose + owned Host Brain Agent).
 NEVER runs `docker compose down -v`, NEVER deletes volumes, and checks active jobs before stopping.

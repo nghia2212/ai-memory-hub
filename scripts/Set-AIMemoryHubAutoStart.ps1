@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Optional, reversible current-user Windows Login Auto-Start for AI Memory Hub (OFF by default).
 Never stores credentials in scheduled-task arguments; never modifies system-wide privileges or deletes data.

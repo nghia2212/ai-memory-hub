@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Unified Windows Startup Launcher for AI Memory Hub V3.2.1 (P16B.4).
 Starts required Docker Compose services (preserving volumes) + Windows Host Brain Agent (single-instance),

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Read-only status diagnostics for AI Memory Hub (Docker services, Host Brain Agent, Hub-to-Host link, P16B Recovery Queue, Auto-Start).
 #>
