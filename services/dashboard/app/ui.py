@@ -132,6 +132,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </style>
   <link rel="stylesheet" href="/workbench.css">
   <script defer src="/workbench.js"></script>
+  <script defer src="/execution-map.js"></script>
 </head>
 <body>
   <header>
@@ -151,6 +152,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button onclick="showTab('overview', this)" class="active">Tổng quan</button>
     <button onclick="showTab('plans', this)" >Giao công việc</button>
     <button onclick="showTab('agents', this)" >Agent Control Center</button>
+    <button id="trace-nav" onclick="showTab('traces', this)">Bản đồ thực thi</button>
     <button onclick="showTab('code', this)" >Codebase Explorer</button>
     <button onclick="showTab('projects', this)" >Dự án & Worktree</button>
     <button onclick="showTab('memory', this)" >Bộ nhớ</button>
@@ -450,6 +452,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="metrics-view" style="margin-top:12px"></div>
       </div>
     </section>
+    <section id="tab-traces" class="panel">
+      <h2>Bản đồ thực thi</h2>
+      <div class="card">
+        <div class="trace-filters">
+          <label>Dự án<select id="trace-proj"></select></label>
+          <label>Worktree<select id="trace-wt"></select></label>
+          <label>Plan ID<input id="trace-plan"></label>
+          <label>Task ID<input id="trace-task"></label>
+          <label>Session ID<input id="trace-session"></label>
+          <label>Agent ID<input id="trace-agent"></label>
+          <label>Model ID<input id="trace-model"></label>
+          <label>Trạng thái<select id="trace-status"><option value="">Tất cả</option><option>running</option><option>succeeded</option><option>failed</option><option>blocked</option><option>cancelled</option><option>unknown</option><option>unsupported</option></select></label>
+          <label>Từ giờ VN<input type="datetime-local" id="trace-from"></label>
+          <label>Đến giờ VN<input type="datetime-local" id="trace-to"></label>
+          <label>Chế độ<select id="trace-mode"><option value="graph">Graph View</option><option value="swim">Swimlane View</option></select></label>
+        </div>
+        <button id="trace-refresh" type="button">Tải trace</button>
+        <p id="trace-count" aria-live="polite"></p>
+        <button id="trace-prev" type="button" class="secondary">Trang trước</button>
+        <button id="trace-next" type="button" class="secondary">Trang sau</button>
+      </div>
+      <div class="trace-layout">
+        <div class="card trace-canvas" id="trace-view"></div>
+        <aside class="card" id="trace-detail">Chọn step để xem bằng chứng.</aside>
+      </div>
+    </section>
   </main>
 
   <div id="toast"></div>
@@ -632,7 +660,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const data = await apiFetch("/api/projects");
         projectsCache = data.items || [];
-        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj", "agents-proj", "metrics-proj"];
+        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj", "agents-proj", "metrics-proj", "trace-proj"];
         for (const sid of selects) {
           const sel = document.getElementById(sid);
           const prev = sel.value;
