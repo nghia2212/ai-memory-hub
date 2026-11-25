@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .config import HermesConfig
-from .providers import ProviderError, SummarizationProvider, build_provider
+from .providers import ProviderError, SummarizationProvider, MockProvider, build_provider
+from .trace_provider import context, emit, now
 from .redactor import sanitize_event_payload
 
 ALLOWED_EVENT_KINDS = frozenset(
@@ -137,7 +138,14 @@ class HermesWorker:
                 continue
 
             try:
-                summary = provider.summarize(event_kind, sanitized)
+                trace_ctx = context.set((self.bridge,event))
+                started = now()
+                try:
+                    summary = provider.summarize(event_kind, sanitized)
+                    if isinstance(provider,MockProvider):
+                        emit("mock",provider.model,started,local=True)
+                finally:
+                    context.reset(trace_ctx)
                 used_tokens = (summary.input_tokens or 0) + (summary.output_tokens or 0)
                 stats.total_tokens += used_tokens
 
