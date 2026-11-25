@@ -98,20 +98,23 @@ class CodebaseService:
         self._scope_locks: dict[str, asyncio.Lock] = {}
         self._git_state_cache: dict[str, tuple[float, Any]] = {}
 
-    def _inspect_git_cached(self, cbm_project: str, root: Path, entry: WorktreeEntry, *, ttl_sec: float = 15.0, force: bool = False):
+    async def _inspect_git_cached(
+        self, cbm_project: str, root: Path, entry: WorktreeEntry, *, ttl_sec: float = 60.0, force: bool = False
+    ):
         now = time.monotonic()
         if not force:
             cached = self._git_state_cache.get(cbm_project)
             if cached is not None and (now - cached[0]) < ttl_sec:
                 return cached[1]
-        state = inspect_worktree_git(
+        state = await asyncio.to_thread(
+            inspect_worktree_git,
             root,
             fallback_head=entry.head_commit,
             fallback_branch=entry.branch,
             fallback_dirty=entry.dirty_fingerprint,
             extra_excludes=entry.exclude,
         )
-        self._git_state_cache[cbm_project] = (now, state)
+        self._git_state_cache[cbm_project] = (time.monotonic(), state)
         return state
 
     def _get_scope_lock(self, cbm_project: str) -> asyncio.Lock:
@@ -167,7 +170,7 @@ class CodebaseService:
         entry = await self._require_worktree(req.project_id, req.worktree_id)
         cbm_project = cbm_project_name(req.project_id, req.worktree_id)
         root = Path(entry.container_root)
-        git_state = self._inspect_git_cached(cbm_project, root, entry, force=True)
+        git_state = await self._inspect_git_cached(cbm_project, root, entry, force=True)
 
         # Deduplicate active job for the same (project_id, worktree_id)
         active = self._store.get_active_job(str(req.project_id), str(req.worktree_id))
@@ -261,7 +264,7 @@ class CodebaseService:
         cbm_project = cbm_project_name(req.project_id, req.worktree_id)
         root = Path(entry.container_root)
 
-        git_state = self._inspect_git_cached(cbm_project, root, entry, ttl_sec=15.0)
+        git_state = await self._inspect_git_cached(cbm_project, root, entry, ttl_sec=60.0)
         snapshot = self._store.get_snapshot(cbm_project)
         if snapshot is None:
             freshness: str = "unindexed"
