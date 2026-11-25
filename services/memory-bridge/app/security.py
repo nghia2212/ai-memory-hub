@@ -17,6 +17,8 @@ from .errors import BridgeError
 SCOPE_RANK = {
     "read": {"read"},
     "write": {"read", "write"},
+    "planner": {"read", "planner"},
+    "runner": {"read", "write", "runner"},
     "admin": {"read", "write", "admin"},
     "worker": {"worker"},
 }
@@ -50,6 +52,8 @@ def authenticate_token(token: str | None, settings: Settings) -> AuthPrincipal:
 
     for role, configured in (
         ("admin", settings.admin_tokens),
+        ("runner", settings.runner_tokens),
+        ("planner", settings.planner_tokens),
         ("write", settings.write_tokens),
         ("read", settings.read_tokens),
         ("worker", settings.worker_tokens),
@@ -73,6 +77,12 @@ def extract_bearer_token(auth_header: str | None) -> str | None:
 def require_scope(principal: AuthPrincipal, required_scope: str) -> None:
     if required_scope not in principal.scopes:
         raise BridgeError(403, "forbidden", f"Scope '{required_scope}' is required")
+
+
+def require_any_scope(principal: AuthPrincipal, *required_scopes: str) -> None:
+    if not any(scope in principal.scopes for scope in required_scopes):
+        joined = " or ".join(required_scopes)
+        raise BridgeError(403, "forbidden", f"One of scopes ({joined}) is required")
 
 
 def validate_safe_worktree_root(raw_path: str) -> str:

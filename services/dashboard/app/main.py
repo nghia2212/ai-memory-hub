@@ -310,6 +310,77 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             )
         return resp
 
+    @app.get("/api/v2/catalog")
+    async def api_v2_catalog() -> JSONResponse:
+        return await _proxy_bridge("GET", "/v2/catalog")
+
+    @app.get("/api/v2/evaluations")
+    async def api_v2_evaluations(project_id: str | None = None) -> JSONResponse:
+        params = {"project_id": project_id} if project_id else None
+        return await _proxy_bridge("GET", "/v2/evaluations", params=params)
+
+    @app.get("/api/v2/policies")
+    async def api_v2_policies(project_id: str) -> JSONResponse:
+        return await _proxy_bridge("GET", "/v2/policies", params={"project_id": project_id})
+
+    @app.put("/api/v2/policies")
+    async def api_v2_policies_update(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("PUT", "/v2/policies", use_admin=True, json_body=await request.json())
+
+    @app.get("/api/v2/plans")
+    async def api_v2_plans(project_id: str) -> JSONResponse:
+        return await _proxy_bridge("GET", "/v2/plans", params={"project_id": project_id})
+
+    @app.get("/api/v2/plans/{plan_id}")
+    async def api_v2_plan_detail(plan_id: str, project_id: str) -> JSONResponse:
+        return await _proxy_bridge("GET", f"/v2/plans/{plan_id}", params={"project_id": project_id})
+
+    @app.post("/api/v2/plans/{plan_id}/{action}")
+    async def api_v2_plan_action(plan_id: str, action: str, project_id: str, request: Request) -> JSONResponse:
+        if action not in {"approve", "reject", "pause", "resume", "cancel"}:
+            raise HTTPException(status_code=404, detail={"error": {"code": "invalid_action", "message": "Invalid plan action"}})
+        require_authenticated_csrf(request, cfg)
+        body = await request.json() if await request.body() else {}
+        return await _proxy_bridge(
+            "POST",
+            f"/v2/plans/{plan_id}/{action}",
+            use_admin=True,
+            params={"project_id": project_id},
+            json_body=body,
+        )
+
+    @app.get("/api/v2/sessions")
+    async def api_v2_sessions(project_id: str, complexity: str = "", outcome: str = "") -> JSONResponse:
+        params: dict[str, Any] = {"project_id": project_id}
+        if complexity:
+            params["complexity"] = complexity
+        if outcome:
+            params["outcome"] = outcome
+        return await _proxy_bridge("GET", "/v2/sessions", params=params)
+
+    @app.delete("/api/v2/sessions/{session_id}")
+    async def api_v2_session_delete(session_id: str, project_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge(
+            "DELETE",
+            f"/v2/sessions/{session_id}",
+            use_admin=True,
+            params={"project_id": project_id},
+        )
+
+    @app.get("/api/v2/analytics/cohorts")
+    async def api_v2_cohorts(project_id: str) -> JSONResponse:
+        return await _proxy_bridge("GET", "/v2/analytics/cohorts", params={"project_id": project_id})
+
+    @app.get("/api/v2/analytics/calibration")
+    async def api_v2_calibration(project_id: str) -> JSONResponse:
+        return await _proxy_bridge("GET", "/v2/analytics/calibration", params={"project_id": project_id})
+
+    @app.get("/api/v2/quotas")
+    async def api_v2_quotas() -> JSONResponse:
+        return await _proxy_bridge("GET", "/v2/quotas")
+
     return app
 
 

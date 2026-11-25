@@ -32,6 +32,8 @@ class Settings:
     codebase_admin_token: str | None = field(default_factory=lambda: os.environ.get("CODEBASE_ADMIN_TOKEN") or None)
     read_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_READ_TOKENS", "")))
     write_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_WRITE_TOKENS", "")))
+    planner_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_PLANNER_TOKENS", "")))
+    runner_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_RUNNER_TOKENS", "")))
     admin_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_ADMIN_TOKENS", "")))
     worker_tokens: set[str] = field(default_factory=lambda: _split_tokens(os.environ.get("BRIDGE_WORKER_TOKENS", "")))
     default_limit: int = 5
