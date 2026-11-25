@@ -53,7 +53,7 @@ def _setup_project(client: TestClient, name: str = "v2-proj", identity: str = "g
 
 
 def test_v2_catalog_routing_and_adaptive_brain_defaults(client: TestClient):
-    assert client.get("/healthz").json()["schema_version"] == 3
+    assert client.get("/healthz").json()["schema_version"] == 4
     pid, wid = _setup_project(client)
 
     # Adaptive brain defaults reflect verified host CLI discovery (Neon/Hydrogen unavailable)
