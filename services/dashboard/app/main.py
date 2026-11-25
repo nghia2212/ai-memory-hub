@@ -589,6 +589,9 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
                 detail={"error": {"code": "invalid_input", "message": "Cần project_id, worktree_id và objective"}},
             )
 
+        if len(objective) > 32000:
+            raise HTTPException(422, "Prompt tối đa 32000 ký tự; hãy chia nhiệm vụ hoặc dùng tham chiếu tài liệu.")
+
         # Heuristic complexity/task_type classification if not provided
         low_obj = objective.lower()
         task_type = body.get("task_type")
@@ -647,11 +650,16 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
             mem_refs = json.loads(context.body).get("items", [])[:3]
         refs = [f"{r['path']}:{r['line_start']} {r['title']}" for r in code_refs]
         refs.extend(f"Memory {m['id']}: {m['title']}" for m in mem_refs)
-        task_objective = objective + ("\nTham chiếu đã tra cứu:\n" + "\n".join(refs) if refs else "")
+        # Preserve the complete user objective; only optional references may be omitted.
+        task_objective = objective
+        for ref in refs:
+            suffix = ("\nTham chiếu đã tra cứu:\n" if task_objective == objective else "\n") + ref
+            if len(task_objective) + len(suffix) <= 32000:
+                task_objective += suffix
         task_spec = {
             "task_key": "T1",
             "title": objective[:120],
-            "objective": task_objective[:4000],
+            "objective": task_objective,
             "dependencies": [],
             "owned_paths": [],
             "acceptance_checks": ["Báo cáo tóm tắt có bằng chứng kiểm tra thực tế"],
