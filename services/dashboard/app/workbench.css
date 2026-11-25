@@ -99,3 +99,15 @@
 
 /* V2.2.2 long prompt editor */
 .prompt-tools{align-items:center;flex-wrap:wrap;margin:8px 0}.prompt-tools span{font-size:12px}#plan-objective{min-height:110px;max-height:350px;resize:vertical;white-space:pre-wrap}#plan-objective.prompt-expanded{height:65vh;max-height:75vh;min-height:260px}#plan-char-count.warn{color:#ef4444}#plan-file[hidden]{display:none}
+
+/* V3.2 Conversation History 2-pane dark mode layout */
+.conv-layout{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:12px;height:calc(100vh - 230px);min-height:420px}
+.conv-sidebar,.conv-main{display:flex;flex-direction:column;min-height:0;overflow:hidden;margin:0}
+.conv-list,.conv-messages{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px}
+.conv-list-item{display:flex;flex-direction:column;gap:3px;text-align:left;padding:8px;border:1px solid var(--border);border-radius:8px;background:#0f172a;color:inherit;cursor:pointer}
+.conv-list-item.is-selected{border-color:var(--accent,#38bdf8);background:#0c4a6e}
+.conv-msg{border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.conv-msg-user{background:#1e293b;border-left:4px solid #38bdf8}
+.conv-msg-assistant{background:#0f172a;border-left:4px solid #22c55e}
+.conv-msg-text{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font-size:13px;font-family:inherit}
+@media(max-width:900px){.conv-layout{grid-template-columns:1fr;height:auto}}

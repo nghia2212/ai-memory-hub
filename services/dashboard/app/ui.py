@@ -133,6 +133,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <link rel="stylesheet" href="/workbench.css">
   <script defer src="/workbench.js"></script>
   <script defer src="/execution-map.js"></script>
+  <script defer src="/v3-ui.js"></script>
 </head>
 <body>
   <header>
@@ -153,6 +154,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button onclick="showTab('plans', this)" >Giao công việc</button>
     <button onclick="showTab('agents', this)" >Agent Control Center</button>
     <button id="trace-nav" onclick="showTab('traces', this)">Bản đồ thực thi</button>
+    <button id="conv-nav" onclick="showTab('conversations', this)">Lịch sử hội thoại AI</button>
+    <button id="mcp-nav" onclick="showTab('mcp', this)">Dynamic MCP</button>
     <button onclick="showTab('code', this)" >Codebase Explorer</button>
     <button onclick="showTab('projects', this)" >Dự án & Worktree</button>
     <button onclick="showTab('memory', this)" >Bộ nhớ</button>
@@ -540,6 +543,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
     </section>
+    <section id="tab-conversations" class="panel">
+      <div class="trace-page-head">
+        <h2>Lịch sử hội thoại AI (V3.2 / V3.3 FTS5)</h2>
+        <button id="conv-refresh" type="button">Tải hội thoại</button>
+      </div>
+      <div class="card">
+        <div class="trace-filters">
+          <label>Dự án<select id="conv-proj"></select></label>
+          <label>Worktree<select id="conv-wt"></select></label>
+          <label>Client<select id="conv-client"><option value="">Tất cả</option><option>antigravity</option><option>claude</option><option>codex</option><option>gemini</option><option>manual_import</option></select></label>
+          <label>Model<input id="conv-model" placeholder="vd: gemini-4-neon-medium"></label>
+          <label>Tìm kiếm FTS5 tiếng Việt (0 LLM)<input id="conv-search" maxlength="200" placeholder="Nhập từ khóa + Enter"></label>
+        </div>
+      </div>
+      <div class="conv-layout">
+        <aside class="card conv-sidebar">
+          <div id="conv-list" class="conv-list">Chọn dự án để xem hội thoại.</div>
+          <div class="row-actions" style="margin-top:8px">
+            <button id="conv-prev" type="button" class="secondary">Trước</button>
+            <button id="conv-next" type="button" class="secondary">Sau</button>
+          </div>
+        </aside>
+        <div class="card conv-main">
+          <div id="conv-detail-head"></div>
+          <div id="conv-messages" class="conv-messages">Chọn hội thoại bên trái để xem chi tiết.</div>
+        </div>
+      </div>
+    </section>
+    <section id="tab-mcp" class="panel">
+      <div class="trace-page-head">
+        <h2>Dynamic MCP Registry &amp; Capability Routing (V3.0)</h2>
+        <button id="mcp-refresh" type="button">Làm mới Registry</button>
+      </div>
+      <div class="card">
+        <h3>Kiểm thử Capability Router (0 LLM)</h3>
+        <div class="trace-filters">
+          <label>Dự án<select id="mcp-proj"></select></label>
+          <label>Capabilities (phân tách bằng dấu phẩy)<input id="mcp-route-caps" value="code_search, memory_read"></label>
+          <label><input id="mcp-route-write" type="checkbox"> Cho phép write_scoped</label>
+        </div>
+        <button id="mcp-route-btn" type="button" class="secondary">Định tuyến MCP</button>
+        <div id="mcp-route-result" style="margin-top:8px"></div>
+      </div>
+      <div id="mcp-servers-list"></div>
+      <div class="card">
+        <h3>Nhật ký Audit Dynamic MCP</h3>
+        <div id="mcp-audit-list"></div>
+      </div>
+    </section>
   </main>
 
   <div id="toast"></div>
@@ -729,7 +781,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const data = await apiFetch("/api/projects");
         projectsCache = data.items || [];
-        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj", "agents-proj", "metrics-proj", "trace-proj"];
+        const selects = ["wt-project-select", "code-proj", "mem-proj", "ho-proj", "ev-proj", "brain-proj", "plans-proj", "sess-proj", "agents-proj", "metrics-proj", "trace-proj", "conv-proj", "mcp-proj"];
         for (const sid of selects) {
           const sel = document.getElementById(sid);
           const prev = sel.value;

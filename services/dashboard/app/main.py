@@ -230,6 +230,10 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     def execution_map_js():
         return Response(Path(__file__).with_name("execution-map.js").read_bytes(), media_type="application/javascript")
 
+    @app.get("/v3-ui.js")
+    def v3_ui_js():
+        return Response(Path(__file__).with_name("v3-ui.js").read_bytes(), media_type="application/javascript")
+
     @app.get("/api/v2/traces")
     async def api_traces(request: Request):
         _require_session(request)
@@ -893,6 +897,72 @@ def create_dashboard_app(settings: DashboardSettings | None = None) -> FastAPI:
     async def api_v2_quotas(request: Request) -> JSONResponse:
         _require_session(request)
         return await _proxy_bridge("GET", "/v2/quotas")
+
+    # --- V3 Dynamic MCP & Conversation History Proxy Routes (all auth/CSRF enforced) ---
+    @app.get("/api/v3/mcp/servers")
+    async def api_v3_mcp_servers(request: Request) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", "/v3/mcp/servers")
+
+    @app.post("/api/v3/mcp/servers")
+    async def api_v3_mcp_register(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v3/mcp/servers", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v3/mcp/servers/{server_id}/approval")
+    async def api_v3_mcp_approval(server_id: str, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v3/mcp/servers/{server_id}/approval", use_admin=True, json_body=await request.json())
+
+    @app.post("/api/v3/mcp/route")
+    async def api_v3_mcp_route(request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", "/v3/mcp/route", planner=True, json_body=await request.json())
+
+    @app.get("/api/v3/mcp/audit")
+    async def api_v3_mcp_audit(request: Request, limit: int = 50) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", "/v3/mcp/audit", params={"limit": limit})
+
+    @app.get("/api/v3/conversations")
+    async def api_v3_conversations(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "worktree_id", "client_type", "model_id", "limit", "offset"}
+        return await _proxy_bridge("GET", "/v3/conversations", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.get("/api/v3/conversations/search")
+    async def api_v3_conversations_search(request: Request) -> JSONResponse:
+        _require_session(request)
+        allowed = {"project_id", "worktree_id", "client_type", "model_id", "query", "limit", "max_chars"}
+        return await _proxy_bridge("GET", "/v3/conversations/search", params={k: v for k, v in request.query_params.items() if k in allowed})
+
+    @app.get("/api/v3/conversations/{conv_id}")
+    async def api_v3_conversation_detail(conv_id: UUID, project_id: UUID, request: Request, limit: int = 100, offset: int = 0) -> JSONResponse:
+        _require_session(request)
+        return await _proxy_bridge("GET", f"/v3/conversations/{conv_id}", params={"project_id": str(project_id), "limit": limit, "offset": offset})
+
+    @app.get("/api/v3/conversations/{conv_id}/export")
+    async def api_v3_conversation_export(conv_id: UUID, project_id: UUID, request: Request, fmt: str = "json") -> Response:
+        _require_session(request)
+        if fmt == "md":
+            headers = {"Authorization": f"Bearer {cfg.bridge_read_token}"} if cfg.bridge_read_token else {}
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(f"{cfg.bridge_url.rstrip('/')}/v3/conversations/{conv_id}/export", headers=headers, params={"project_id": str(project_id), "format": "md"})
+                    return Response(content=resp.content, status_code=resp.status_code, media_type="text/markdown; charset=utf-8")
+            except httpx.HTTPError:
+                return JSONResponse(status_code=503, content={"error": {"code": "bridge_unavailable", "message": "Memory Bridge unavailable"}})
+        return await _proxy_bridge("GET", f"/v3/conversations/{conv_id}/export", params={"project_id": str(project_id), "format": "json"})
+
+    @app.post("/api/v3/conversations/{conv_id}/promote")
+    async def api_v3_conversation_promote(conv_id: UUID, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("POST", f"/v3/conversations/{conv_id}/promote", use_admin=True, json_body=await request.json())
+
+    @app.delete("/api/v3/conversations/{conv_id}")
+    async def api_v3_conversation_delete(conv_id: UUID, project_id: UUID, request: Request) -> JSONResponse:
+        require_authenticated_csrf(request, cfg)
+        return await _proxy_bridge("DELETE", f"/v3/conversations/{conv_id}", use_admin=True, params={"project_id": str(project_id)})
 
     return app
 
