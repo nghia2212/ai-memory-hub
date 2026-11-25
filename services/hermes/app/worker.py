@@ -10,7 +10,9 @@ from .config import HermesConfig
 from .providers import ProviderError, SummarizationProvider, build_provider
 from .redactor import sanitize_event_payload
 
-ALLOWED_EVENT_KINDS = frozenset({"session_stop", "session_end", "task_completed", "decision_note"})
+ALLOWED_EVENT_KINDS = frozenset(
+    {"session_stop", "session_end", "task_completed", "decision_note", "handoff_created"}
+)
 
 
 class BridgeAPI(Protocol):

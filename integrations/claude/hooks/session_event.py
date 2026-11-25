@@ -1,5 +1,6 @@
-"""Claude Code Stop / SessionEnd hook: capture bounded session metadata only.
+"""Stop / SessionEnd hook for Claude Code, Gemini CLI, and Codex CLI.
 
+Captures bounded session metadata with standardized source_agent and optional task_id.
 Never reads transcript_path or source files. Always fails open (exit 0).
 """
 from __future__ import annotations
@@ -23,12 +24,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         parser = argparse.ArgumentParser(add_help=False)
         parser.add_argument("--kind", default="")
+        parser.add_argument("--source-agent", default="claude", choices=["claude", "gemini", "codex"])
+        parser.add_argument("--task-id", default="")
+        parser.add_argument("--format", default="text", choices=["text", "gemini", "json"])
         args, _ = parser.parse_known_args(argv)
 
         stdin_data = read_hook_stdin()
         cwd = str(stdin_data.get("cwd") or os.getcwd())
         scope = resolve_git_scope(cwd)
         if not scope:
+            if args.format == "gemini":
+                print("{}")
             return 0
 
         raw_kind = (args.kind or str(stdin_data.get("hook_event_name") or "stop")).strip().lower()
@@ -40,15 +46,22 @@ def main(argv: list[str] | None = None) -> int:
         bridge_url, read_token, write_token = load_bridge_settings()
         project_id, worktree_id = match_registered_scope(bridge_url, read_token, scope, timeout=1.5)
         if not project_id or not worktree_id:
+            if args.format == "gemini":
+                print("{}")
             return 0
 
+        task_id = args.task_id or os.environ.get("AI_MEMORY_TASK_ID", "")
         ts = int(time.time())
-        idem_seed = f"{project_id}:{worktree_id}:{event_kind}:{session_hash}:{scope.head_commit}:{scope.dirty_fingerprint}"
+        idem_seed = (
+            f"{args.source_agent}:{project_id}:{worktree_id}:{task_id}:"
+            f"{event_kind}:{session_hash}:{scope.head_commit}:{scope.dirty_fingerprint}"
+        )
         idempotency_key = hashlib.sha256(idem_seed.encode("utf-8")).hexdigest()[:24]
 
-        payload = {
+        payload: dict = {
             "project_id": project_id,
             "worktree_id": worktree_id,
+            "source_agent": args.source_agent,
             "kind": event_kind,
             "idempotency_key": idempotency_key,
             "timestamp": ts,
@@ -60,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
                 "session_ref": session_hash,
             },
         }
+        if task_id:
+            payload["task_id"] = task_id
+
         http_json(
             f"{bridge_url}/v1/events",
             method="POST",
@@ -67,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
             token=write_token or read_token,
             timeout=2.0,
         )
+        if args.format == "gemini":
+            print("{}")
         return 0
     except Exception:
         return 0
