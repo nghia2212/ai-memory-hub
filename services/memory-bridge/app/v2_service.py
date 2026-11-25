@@ -12,6 +12,7 @@ from .db import DatabaseManager, reconcile_expired_job_leases, utc_now_iso
 from .errors import BridgeError
 from .security import redact_payload
 from .trace_usage import sync_usage_trace
+from .quota_guard import quota_status
 from .trace_lifecycle import trace_key, plan_created, agent_claimed, agent_heartbeat, agent_finished
 from .v2_schemas import (
     BrainConfigUpdateRequest,
@@ -217,6 +218,7 @@ class V2BridgeService:
                 ).fetchall()
                 prev_ids = {r["model_id"] for r in prev_rows}
 
+            quotas = self._latest_quotas(conn)
             enriched_models: list[dict[str, Any]] = []
             cur_ids: set[str] = set()
             retiring_models: list[str] = []
@@ -246,6 +248,7 @@ class V2BridgeService:
                         "auth_mode": m["auth_mode"],
                         "status": m["status"],
                         "verification_stage": stage,
+                        "quota": quota_status(quotas, m["provider"], mid, m["auth_mode"]),
                         "context_limit": m["context_limit"],
                         "output_limit": m["output_limit"],
                         "capabilities": caps,
@@ -497,6 +500,11 @@ class V2BridgeService:
             if not eligible:
                 raise BridgeError(422, "no_eligible_model", "No eligible verified model matches policy constraints")
 
+            quotas = self._latest_quotas(conn)
+            eligible = [m for m in eligible if quota_status(quotas,m["provider"],m["model_id"],m["auth_mode"])["state"] != "exhausted"]
+            if not eligible:
+                raise BridgeError(409, "quota_exhausted", "All eligible models have exhausted quota")
+
             evals = conn.execute(
                 """
                 SELECT * FROM v2_model_evaluations
@@ -524,7 +532,7 @@ class V2BridgeService:
                 ev = eval_map.get((m["provider"], m["model_id"], m["auth_mode"]))
                 quality = ev["correctness_score"] if ev and ev["correctness_score"] is not None else None
                 cost = ev["avg_effective_cost_usd"] if ev else None
-                return (quality is None, -(quality if quality is not None else 0),
+                return (quota_status(quotas,m["provider"],m["model_id"],m["auth_mode"])["state"] != "observed_available", quality is None, -(quality if quality is not None else 0),
                         (m["provider"], m["model_id"]) != preferred,
                         cost is None, cost if cost is not None else 0,
                         m["provider"], m["model_id"])
@@ -1271,6 +1279,8 @@ class V2BridgeService:
             ).fetchall()
 
             chosen: dict[str, Any] | None = None
+            quota_blocked = False
+            quotas = self._latest_quotas(conn)
             for cand in candidates:
                 unmet = conn.execute(
                     """
@@ -1282,11 +1292,14 @@ class V2BridgeService:
                     (cand["id"],),
                 ).fetchone()
                 if int(unmet["cnt"]) == 0:
+                    if quota_status(quotas,cand["assigned_provider"],cand["assigned_model_id"],cand["auth_mode"])["state"] == "exhausted":
+                        quota_blocked = True
+                        continue
                     chosen = dict(cand)
                     break
 
             if not chosen:
-                return {"claimed": False, "reason": "no_ready_tasks"}
+                return {"claimed": False, "reason": "quota_exhausted" if quota_blocked else "no_ready_tasks"}
 
             att_row = conn.execute(
                 "SELECT COALESCE(MAX(attempt_number), 0) AS n FROM v2_task_attempts WHERE task_id = ?",
@@ -1485,6 +1498,10 @@ class V2BridgeService:
                 """,
                 (req.outcome, now, req.error_code, redact_payload(req.error_summary), lease["attempt_id"]),
             )
+            if req.error_code == "quota_exceeded":
+                model = conn.execute("SELECT assigned_provider,assigned_model_id,auth_mode FROM v2_tasks WHERE id=?", (job_id,)).fetchone()
+                if model:
+                    conn.execute("""INSERT INTO v2_quota_snapshots (id,provider,auth_mode,account_bucket,quota_kind,unit,numerator,denominator,window_label,reset_at,source,confounded,observed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (str(uuid.uuid4()),model["assigned_provider"],model["auth_mode"],"model:"+model["assigned_model_id"],"subscription_quota" if model["auth_mode"]=="subscription_cli" else "rate_limit","availability_flag",1,1,"until confirmed reset",None,"runner_quota_error",0,now))
             task_state = req.outcome if req.outcome in ("succeeded", "failed", "cancelled") else "failed"
             conn.execute("UPDATE v2_tasks SET state = ?, updated_at = ? WHERE id = ?", (task_state, now, job_id))
 
