@@ -210,13 +210,14 @@ def compute_tree_fingerprint(container_root: Path, extra_excludes: list[str] | N
                 continue
             entries.append((rel_f, full_f))
 
+    use_content = len(entries) <= 100
     for rel_f, full_f in sorted(entries, key=lambda item: item[0]):
         hasher.update(rel_f.encode("utf-8"))
         hasher.update(b"\x00")
         try:
             st = full_f.stat()
-            if st.st_size > 2 * 1024 * 1024:
-                hasher.update(f"large:{st.st_size}:{st.st_mtime_ns}".encode("utf-8"))
+            if not use_content or st.st_size > 256 * 1024:
+                hasher.update(f"meta:{st.st_size}:{st.st_mtime_ns}".encode("utf-8"))
             else:
                 with open(full_f, "rb") as fh:
                     while chunk := fh.read(65536):
