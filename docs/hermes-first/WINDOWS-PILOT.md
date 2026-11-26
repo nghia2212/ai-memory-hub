@@ -2,7 +2,7 @@
 No separate Hermes installation. The official image is managed by the existing Hub Compose project. Use Docker Desktop Linux containers. This is a pilot, not production cutover: no worker adapter, no automatic migration and no dual-dispatch of a project.
 
 ## Start
-1. Preserve legacy data and drain active legacy jobs before testing. Back up through the existing Memory Bridge backup API and verify restore separately.
+1. Preserve legacy data and drain active legacy jobs before testing. Stop the old Dashboard, optional legacy Hermes worker and Host Brain process using the unified Stop script before switching, so the adapter reloads the new source and local configuration. Back up through the existing Memory Bridge backup API and verify restore separately.
 2. Run from repo root:
    
        .\scripts\Start-AIMemoryHub.ps1 -StartDockerDesktop -HealthTimeoutSec 180

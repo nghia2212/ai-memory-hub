@@ -49,20 +49,20 @@ try {
         exit 10
     }
 
-    $running = @(& docker compose ps --status running --services)
+    $running = @(& docker compose --profile legacy --profile hermes ps --status running --services)
     if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect Docker services; no stop attempted.' }
     if (!$DryRun -and ($running -contains 'hermes-native') -and !$HermesDrained -and !$Force) {
         Write-Warning 'Hermes task state is not yet reconciled with Hub. Check its Kanban for active workers, then use -HermesDrained to confirm a graceful stop, or -Force to interrupt.'
         exit 10
     }
     if ($DryRun) {
-        Write-Host "[DRYRUN] Sẽ chạy 'docker compose stop hermes-native codebase memory-bridge dashboard' (giữ nguyên toàn bộ volumes)." -ForegroundColor Cyan
+        Write-Host "[DRYRUN] Sẽ chạy 'docker compose --profile legacy --profile hermes stop hermes-native hermes dashboard codebase memory-bridge' (giữ nguyên toàn bộ volumes)." -ForegroundColor Cyan
         if (!$HubOnly) { Write-Host "[DRYRUN] Sẽ dừng đúng tiến trình host_brain_agent.py thuộc repo (không chạm tiến trình lạ)." -ForegroundColor Cyan }
         exit 0
     }
 
     Write-Host "[1/2] Dừng các container Docker (bảo toàn 100% SQLite volumes — KHÔNG dùng down -v)..." -ForegroundColor Cyan
-    & docker compose stop hermes-native codebase memory-bridge dashboard
+    & docker compose --profile legacy --profile hermes stop hermes-native hermes dashboard codebase memory-bridge
     if ($LASTEXITCODE -ne 0) { throw 'Compose stop failed; inspect service status before stopping host processes.' }
 
     if (!$HubOnly) {

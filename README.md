@@ -23,7 +23,7 @@ Never commit secrets, source indexes, transcripts, local project paths or projec
 - **Windows Setup & QA**: See [docs/v31/WINDOWS-SETUP.md](docs/v31/WINDOWS-SETUP.md), [docs/v31/STATUS.md](docs/v31/STATUS.md), and `scripts/Test-V31.ps1`.
 
 ## Hermes-first Docker pilot (PR #12)
-Run `scripts/Start-AIMemoryHub.ps1` to start the existing Hub and the official Hermes v0.23.4 container together. Missing Dashboard secrets are generated in ignored local .env. No host Hermes installation needed. Dashboard: http://127.0.0.1:9119 (separate login; see local HERMES_NATIVE_DASHBOARD_* settings). The old UI at 8080 remains available during migration; no automatic legacy recovery in the default pilot mode. Hermes model setup, CLI worker integration and real task recovery still require verification. See [Docker pilot](docs/hermes-first/WINDOWS-PILOT.md).
+Run `scripts/Start-AIMemoryHub.ps1` to start Hub memory services, the Windows host adapter and official Hermes v0.23.4 together. Missing Dashboard secrets are generated in ignored local .env. No host Hermes installation needed. Dashboard: http://127.0.0.1:9119 (separate login; see local HERMES_NATIVE_DASHBOARD_* settings). The old UI at 8080 is disabled by default and remains available through -LegacyOnly after draining and stopping Hermes; no automatic legacy recovery in pilot mode. Hermes model setup, CLI worker integration and real task recovery still require verification. See [Docker pilot](docs/hermes-first/WINDOWS-PILOT.md).
 
 ### Hermes-first UI and Antigravity pilot
 Default startup now runs only the native Hermes UI at 9119; legacy Dashboard uses `-LegacyOnly`. The Hub plugin adds a status tab and opt-in Antigravity plan tool. See [pilot](docs/hermes-first/ANTIGRAVITY.md).

@@ -1431,6 +1431,8 @@ def hermes_agy_analyze(env: dict[str, str], body: dict[str, Any]) -> dict[str, A
     """Bounded opt-in plan invocation; not a durable external Kanban worker."""
     if env.get("HERMES_AGY_ENABLED", "").lower() != "true":
         return {"ok": False, "error_code": "disabled"}
+    if set(body) != {"prompt"}:
+        return {"ok": False, "error_code": "invalid_request"}
     prompt = body.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000 or "\x00" in prompt:
         return {"ok": False, "error_code": "invalid_prompt"}
