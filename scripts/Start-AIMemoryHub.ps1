@@ -51,7 +51,7 @@ try {
             Write-Host '[DRYRUN] Would initialize missing local environment keys; no credentials written.'
         } else {
             & (Join-Path $PSScriptRoot 'init-env.ps1') -EnvFilePath $envPath
-            if ($LASTEXITCODE -ne 0) { throw 'Local environment bootstrap failed.' }
+            if (!$?) { throw 'Local environment bootstrap failed.' }
             $envMap = Read-EnvMap $envPath
             if (!$LegacyOnly -and (!$envMap['HERMES_NATIVE_DASHBOARD_PASSWORD'] -or !$envMap['HERMES_NATIVE_DASHBOARD_SECRET'])) {
                 throw 'Missing Hermes dashboard authentication configuration.'
@@ -103,6 +103,12 @@ try {
         Write-Host "[DRYRUN] Docker OK | Ports: Bridge=$bridgePort, Codebase=$codebasePort, Dashboard=$dashPort, HostAgent=$hostPort" -ForegroundColor Green
         & (Join-Path $PSScriptRoot 'start-host-brain-agent.ps1') -Port $hostPort -DryRun
         exit 0
+    }
+
+    if ($LegacyOnly) {
+        $runningServices = @(& docker compose ps --status running --services)
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to verify Hermes is stopped before legacy recovery.' }
+        if ($runningServices -contains 'hermes-native') { throw 'Drain and stop Hermes before using -LegacyOnly.' }
     }
 
     Write-Step '2/6 Khởi động các container bắt buộc (bảo toàn 100% SQLite volumes, không bật optional MCP/IDE)...'
