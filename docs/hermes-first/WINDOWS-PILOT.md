@@ -26,7 +26,7 @@ No separate Hermes installation. The official image is managed by the existing H
        .\scripts\Stop-AIMemoryHub.ps1 -HermesDrained
 
    Stop preserves both legacy volumes and hermes-native-data. Restart uses the same state; interrupted task behavior still requires an actual test. Use -Force only when accepting interruption. No down -v.
-7. Rollback: after draining Hermes, explicitly stop it with docker compose stop hermes-native; start with scripts/Start-AIMemoryHub.ps1 -LegacyOnly. LegacyOnly does not stop an already running Hermes container. No data deletion.
+7. Rollback: after draining Hermes, explicitly stop it with docker compose stop hermes-native; start with scripts/Start-AIMemoryHub.ps1 -LegacyOnly. LegacyOnly refuses startup while the official Hermes container is still running; it never stops it implicitly. No data deletion.
 8. For Docker Compose directly, run scripts/init-env.ps1 first (secrets are mandatory) then docker compose up -d. Prefer unified launcher to check readiness and start Windows Host Brain.
 
 ## Gates not yet passed
