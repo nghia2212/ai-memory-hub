@@ -5,7 +5,7 @@ Idempotent, safe `.env` bootstrap script for AI Memory Hub.
 .DESCRIPTION
 Generates missing local internal tokens and dashboard secrets into ignored `.env`
 without overwriting existing non-empty values and without printing secret values.
-Hermes stays disabled by default (`HERMES_ENABLED=false`).
+Legacy summarizer stays disabled by default. Official Hermes Dashboard secrets are generated locally.
 #>
 [CmdletBinding()]
 param(
@@ -56,6 +56,12 @@ $defaults = [ordered]@{
     'CODEBASE_PORT'             = '8081'
     'BRIDGE_PORT'               = '8082'
     'DASHBOARD_ALLOWED_ORIGINS' = 'http://127.0.0.1:8080,http://localhost:8080'
+    'HERMES_AGY_ENABLED'        = 'false'
+    'HERMES_AGY_PROJECT_ID'     = ''
+    'HERMES_AGY_WORKTREE_ID'    = ''
+    'HERMES_AGY_MODEL'          = ''
+    'HERMES_NATIVE_PORT'        = '9119'
+    'HERMES_NATIVE_DASHBOARD_USER' = 'admin'
     'HERMES_ENABLED'            = 'false'
     'HERMES_PROVIDER'           = 'deepseek'
     'DEEPSEEK_API_KEY'          = ''
@@ -76,7 +82,10 @@ $secretKeys = @(
     'CODEBASE_READ_TOKEN',
     'CODEBASE_ADMIN_TOKEN',
     'DASHBOARD_PASSWORD',
-    'DASHBOARD_SESSION_SECRET'
+    'DASHBOARD_SESSION_SECRET',
+    'HERMES_NATIVE_DASHBOARD_PASSWORD',
+    'HERMES_NATIVE_DASHBOARD_SECRET',
+    'HERMES_AGY_TOKEN'
 )
 
 $added = New-Object System.Collections.Generic.List[string]

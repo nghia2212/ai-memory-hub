@@ -1,0 +1,6 @@
+name: hub-antigravity
+version: 0.1.0
+description: AI Memory Hub Windows Antigravity analysis adapter
+provides_tools:
+  - hub_antigravity_status
+  - hub_antigravity_analyze

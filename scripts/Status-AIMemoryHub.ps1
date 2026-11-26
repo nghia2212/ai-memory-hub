@@ -34,7 +34,7 @@ try {
 foreach ($svc in @(
     @{ Name = 'Memory Bridge'; Url = "http://127.0.0.1:$bridgePort/healthz" },
     @{ Name = 'Codebase Service'; Url = "http://127.0.0.1:$codebasePort/healthz" },
-    @{ Name = 'Dashboard UI'; Url = "http://127.0.0.1:$dashPort/healthz" },
+    @{ Name = 'Legacy Dashboard (optional)'; Url = "http://127.0.0.1:$dashPort/healthz" },
     @{ Name = 'Host Brain Agent (Local)'; Url = "http://127.0.0.1:$hostPort/healthz" }
 )) {
     try {
@@ -45,6 +45,13 @@ foreach ($svc in @(
         Add-Row $svc.Name 'OFFLINE' "$($svc.Url) không phản hồi"
     }
 }
+
+# Official Hermes Dashboard; do not confuse HTTP readiness with worker/model readiness.
+$hermesPort = if ($envMap['HERMES_NATIVE_PORT']) { [int]$envMap['HERMES_NATIVE_PORT'] } else { 9119 }
+try {
+    $hs = Invoke-RestMethod -Uri "http://127.0.0.1:$hermesPort/api/status" -TimeoutSec 3
+    Add-Row 'Hermes Official Dashboard' $(if ($hs.auth_required -eq $true) { 'AUTH READY' } else { 'UNSAFE/UNKNOWN' }) "http://127.0.0.1:$hermesPort (model/worker unverified)"
+} catch { Add-Row 'Hermes Official Dashboard' 'OFFLINE' "http://127.0.0.1:$hermesPort" }
 
 # 3. Hub-to-Host real link
 try {

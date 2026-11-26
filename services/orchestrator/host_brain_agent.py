@@ -9,6 +9,7 @@ Security:
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import re
 import shutil
@@ -1409,8 +1410,88 @@ def check_runner_process_status(pid: int | None, runner_id: str | None = None) -
         return {"status": "unknown", "reason": str(exc)}
 
 
+# Dedicated Hermes pilot lane: no general host command or runner credential is exposed.
+_HERMES_AGY_LOCK = threading.Lock()
+
+def hermes_agy_status(env: dict[str, str]) -> dict[str, Any]:
+    rc, ver, _ = _run_cmd(["agy", "--version"], timeout=10)
+    return {
+        "installed": rc == 0,
+        "version": _redact_worker_output(ver)[:160] if rc == 0 else None,
+        "enabled": env.get("HERMES_AGY_ENABLED", "").lower() == "true",
+        "configured": all(env.get(k) for k in ("HERMES_AGY_PROJECT_ID", "HERMES_AGY_WORKTREE_ID", "HERMES_AGY_MODEL")),
+        "model": env.get("HERMES_AGY_MODEL") or None,
+        "quota": None,
+        "auth_verified": False,
+        "scope": "operator-approved disposable worktree; plan only",
+    }
+
+
+def hermes_agy_analyze(env: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+    """Bounded opt-in plan invocation; not a durable external Kanban worker."""
+    if env.get("HERMES_AGY_ENABLED", "").lower() != "true":
+        return {"ok": False, "error_code": "disabled"}
+    if set(body) != {"prompt"}:
+        return {"ok": False, "error_code": "invalid_request"}
+    prompt = body.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000 or "\x00" in prompt:
+        return {"ok": False, "error_code": "invalid_prompt"}
+    project, worktree, model = (env.get(k, "") for k in ("HERMES_AGY_PROJECT_ID", "HERMES_AGY_WORKTREE_ID", "HERMES_AGY_MODEL"))
+    try:
+        uuid.UUID(project)
+        uuid.UUID(worktree)
+    except (ValueError, TypeError):
+        return {"ok": False, "error_code": "invalid_operator_scope"}
+    if not model or len(model) > 128 or model.startswith("-") or not re.fullmatch(r"[A-Za-z0-9 ._:/()+-]+", model):
+        return {"ok": False, "error_code": "invalid_operator_model"}
+    allowed, cwd, _ = _validate_allowed_workspace(env, project_id=project, worktree_id=worktree, worktree_path=None)
+    if not allowed:
+        return {"ok": False, "error_code": "workspace_not_allowed"}
+    exe = shutil.which("agy")
+    if not exe or (os.name == "nt" and not exe.lower().endswith(".exe")):
+        return {"ok": False, "error_code": "native_agy_executable_required"}
+    if not _HERMES_AGY_LOCK.acquire(blocking=False):
+        return {"ok": False, "error_code": "busy"}
+    try:
+        rc, help_text, err = _run_cmd(["agy", "--help"], cwd=cwd, timeout=15)
+        help_text += "\n" + err
+        if rc != 0 or not all(flag in help_text for flag in ("--print", "--mode", "--sandbox", "--model", "--print-timeout")):
+            return {"ok": False, "error_code": "unsupported_cli_flags"}
+        rc, models, _ = _run_cmd(["agy", "models"], cwd=cwd, timeout=20)
+        selectors = {s.strip() for line in models.splitlines() for s in re.split(r"\t|\s{2,}", line.strip()) if s.strip()}
+        if rc != 0 or model not in selectors:
+            return {"ok": False, "error_code": "model_not_discovered"}
+        objective = ("Analyze only. Do not edit files, run shell commands, commit, push, deploy, access secrets or leave the workspace. "
+                     "Return findings and a proposed plan in Vietnamese. User task:\n" + prompt)
+        cmd = ["agy", "--mode", "plan", "--sandbox", "--model", model, "--print-timeout", "2m"]
+        structured = "--output-format" in help_text
+        if structured:
+            cmd.extend(["--output-format", "json"])
+        cmd.extend(["--print", objective])
+        rc, out, err = _run_cmd(cmd, cwd=cwd, timeout=145, managed=True)
+        if rc == 124:
+            return {"ok": False, "error_code": "outcome_uncertain", "message": "Inspect Antigravity before retrying."}
+        if re.search(r"(?i)quota exceeded|rate.limit exceeded|resource.exhausted|usage limit", (err + out)[:4000]):
+            return {"ok": False, "error_code": "quota_exceeded"}
+        if rc != 0 or not out:
+            return {"ok": False, "error_code": "cli_failed", "exit_code": rc}
+        from services.orchestrator.result_parser import parse_agent_stdout
+        parsed = parse_agent_stdout(cli_family="agy", stdout=out, stderr=err, exit_code=rc)
+        answer = parsed.get("final_answer") or (out if not structured else "")
+        if not answer:
+            return {"ok": False, "error_code": "missing_final_answer"}
+        session, reported_model = _extract_cli_session_and_model(out) if structured else (None, None)
+        return {"ok": True, "result": _redact_worker_output(answer)[:8000],
+                "session_id": session, "reported_model": reported_model,
+                "usage": parsed.get("usage") if structured else None, "quota": None,
+                "review_required": True}
+    finally:
+        _HERMES_AGY_LOCK.release()
+
+
 def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
     expected_token = env.get("BRIDGE_RUNNER_TOKEN", "")
+    hermes_token = env.get("HERMES_AGY_TOKEN", "")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -1437,7 +1518,17 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
             raw = self.rfile.read(length).decode("utf-8", errors="replace")
             return json.loads(raw) if raw else {}
 
+        def _check_hermes_auth(self) -> bool:
+            auth = self.headers.get("Authorization", "")
+            return bool(hermes_token) and hmac.compare_digest(auth.encode(), ("Bearer " + hermes_token).encode())
+
         def do_GET(self) -> None:
+            if self.path == "/host/hermes/agy/status":
+                if not self._check_hermes_auth():
+                    self._send(401, {"error": "unauthorized"})
+                else:
+                    self._send(200, hermes_agy_status(env))
+                return
             if self.path == "/healthz":
                 self._send(200, {"service": "host-brain-agent", "ready": True, "ts": utc_now_iso()})
                 return
@@ -1456,6 +1547,22 @@ def make_handler(env: dict[str, str]) -> type[BaseHTTPRequestHandler]:
             self._send(404, {"error": {"code": "not_found", "message": "Not found"}})
 
         def do_POST(self) -> None:
+            if self.path == "/host/hermes/agy/analyze":
+                if not self._check_hermes_auth():
+                    self._send(401, {"error": "unauthorized"})
+                    return
+                try:
+                    size = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < size <= 20000:
+                        raise ValueError("invalid size")
+                    body = self._read_json()
+                    if not isinstance(body, dict) or set(body) != {"prompt"}:
+                        raise ValueError("invalid request")
+                except (ValueError, TypeError):
+                    self._send(400, {"error": "invalid_request"})
+                    return
+                self._send(200, hermes_agy_analyze(env, body))
+                return
             if not self._check_auth():
                 self._send(401, {"error": {"code": "unauthorized", "message": "Invalid runner token"}})
                 return
