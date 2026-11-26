@@ -34,7 +34,7 @@ try {
 foreach ($svc in @(
     @{ Name = 'Memory Bridge'; Url = "http://127.0.0.1:$bridgePort/healthz" },
     @{ Name = 'Codebase Service'; Url = "http://127.0.0.1:$codebasePort/healthz" },
-    @{ Name = 'Dashboard UI'; Url = "http://127.0.0.1:$dashPort/healthz" },
+    @{ Name = 'Legacy Dashboard (optional)'; Url = "http://127.0.0.1:$dashPort/healthz" },
     @{ Name = 'Host Brain Agent (Local)'; Url = "http://127.0.0.1:$hostPort/healthz" }
 )) {
     try {

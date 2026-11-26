@@ -68,6 +68,7 @@ services:
       timeout: 3s
       retries: 3
   dashboard:
+    profiles: [legacy]
     build: ./services/dashboard
     mem_limit: 256m
     restart: unless-stopped
@@ -144,6 +145,8 @@ services:
       HERMES_DASHBOARD: "1"
       HERMES_DASHBOARD_HOST: "0.0.0.0"
       HERMES_DASHBOARD_PORT: "9119"
+      HUB_AGY_TOKEN: "${HERMES_AGY_TOKEN:-}"
+      HUB_HOST_URL: "http://host.docker.internal:${HOST_BRAIN_PORT:-8084}"
       HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${HERMES_NATIVE_DASHBOARD_USER:-admin}"
       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${HERMES_NATIVE_DASHBOARD_PASSWORD:-}"
       HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${HERMES_NATIVE_DASHBOARD_SECRET:-}"
@@ -151,6 +154,7 @@ services:
       - "127.0.0.1:${HERMES_NATIVE_PORT:-9119}:9119"
     volumes:
       - hermes-native-data:/opt/data
+      - ./integrations/hermes/hub-antigravity:/opt/data/plugins/hub-antigravity:ro
     networks: [core, provider]
     healthcheck:
       test: ["CMD", "python3", "-c", "import json,urllib.request; s=json.load(urllib.request.urlopen('http://127.0.0.1:9119/api/status',timeout=3)); assert s.get('auth_required') is True"]

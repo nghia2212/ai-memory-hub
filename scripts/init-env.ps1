@@ -56,6 +56,10 @@ $defaults = [ordered]@{
     'CODEBASE_PORT'             = '8081'
     'BRIDGE_PORT'               = '8082'
     'DASHBOARD_ALLOWED_ORIGINS' = 'http://127.0.0.1:8080,http://localhost:8080'
+    'HERMES_AGY_ENABLED'        = 'false'
+    'HERMES_AGY_PROJECT_ID'     = ''
+    'HERMES_AGY_WORKTREE_ID'    = ''
+    'HERMES_AGY_MODEL'          = ''
     'HERMES_NATIVE_PORT'        = '9119'
     'HERMES_NATIVE_DASHBOARD_USER' = 'admin'
     'HERMES_ENABLED'            = 'false'
@@ -80,7 +84,8 @@ $secretKeys = @(
     'DASHBOARD_PASSWORD',
     'DASHBOARD_SESSION_SECRET',
     'HERMES_NATIVE_DASHBOARD_PASSWORD',
-    'HERMES_NATIVE_DASHBOARD_SECRET'
+    'HERMES_NATIVE_DASHBOARD_SECRET',
+    'HERMES_AGY_TOKEN'
 )
 
 $added = New-Object System.Collections.Generic.List[string]

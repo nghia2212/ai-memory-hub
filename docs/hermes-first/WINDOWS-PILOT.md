@@ -7,8 +7,8 @@ No separate Hermes installation. The official image is managed by the existing H
    
        .\scripts\Start-AIMemoryHub.ps1 -StartDockerDesktop -HealthTimeoutSec 180
 
-   Start pulls the pinned official image if missing, creates the named volume, provisions missing dashboard credentials through init-env.ps1 and waits for authenticated Dashboard /api/status. Existing .env values are preserved by the existing bootstrap; backup is ignored by Git. It also starts the existing Hub services and Host Brain Agent, but suppresses legacy automatic recovery in pilot mode. Do not submit the same project to both schedulers. No production tasks should be submitted to Hermes yet.
-3. Open http://127.0.0.1:9119. Credentials are HERMES_NATIVE_DASHBOARD_USER and HERMES_NATIVE_DASHBOARD_PASSWORD in local .env. Do not share or commit them. Existing legacy UI remains on 8080. The official dashboard is not embedded in the old UI yet.
+   Start pulls the pinned official image if missing, creates the named volume, provisions missing dashboard credentials through init-env.ps1 and waits for authenticated Dashboard /api/status. Existing .env values are preserved by the existing bootstrap; backup is ignored by Git. It also starts the existing memory services and Host Brain Agent, but suppresses legacy automatic recovery in pilot mode. Do not submit the same project to both schedulers. No production tasks should be submitted to Hermes yet.
+3. Open http://127.0.0.1:9119. Credentials are HERMES_NATIVE_DASHBOARD_USER and HERMES_NATIVE_DASHBOARD_PASSWORD in local .env. Do not share or commit them. Legacy UI is off by default; use -LegacyOnly for rollback. Hub status is a native Hermes plugin tab.
 4. Configure an approved model/provider via official Dashboard or interactive setup:
    
        docker compose exec --user hermes -e HOME=/opt/data hermes-native hermes setup
@@ -27,7 +27,7 @@ No separate Hermes installation. The official image is managed by the existing H
 
    Stop preserves both legacy volumes and hermes-native-data. Restart uses the same state; interrupted task behavior still requires an actual test. Use -Force only when accepting interruption. No down -v.
 7. Rollback: after draining Hermes, explicitly stop it with docker compose stop hermes-native; start with scripts/Start-AIMemoryHub.ps1 -LegacyOnly. LegacyOnly refuses startup while the official Hermes container is still running; it never stops it implicitly. No data deletion.
-8. For Docker Compose directly, run scripts/init-env.ps1 first (secrets are mandatory) then docker compose up -d. Prefer unified launcher to check readiness and start Windows Host Brain.
+8. For Docker Compose directly, run scripts/init-env.ps1 first (secrets are mandatory) then docker compose up -d (plugin setup requires the unified launcher). Prefer unified launcher to check readiness and start Windows Host Brain.
 
 ## Gates not yet passed
 - Real Windows Docker pull/start/login and restart persistence.

@@ -29,3 +29,6 @@ Upstream documents external CLI lanes as integration work, not turnkey. Use a He
 - https://hermes-agent.nousresearch.com/docs/reference/cli-commands
 - https://hermes-agent.nousresearch.com/docs/plugins/kanban-graph
 Current online docs may be ahead of the pinned release; verify CLI flags and plugin compatibility locally. Do not silently upgrade.
+
+## H2/H3 pilot update
+Default native dashboard only; legacy profile rollback. Hub plugin status tab and native Antigravity tools implement a bounded opt-in analysis pilot; external durable worker lifecycle still pending. See ANTIGRAVITY.md.

@@ -24,3 +24,6 @@ Never commit secrets, source indexes, transcripts, local project paths or projec
 
 ## Hermes-first Docker pilot (PR #12)
 Run `scripts/Start-AIMemoryHub.ps1` to start the existing Hub and the official Hermes v0.23.4 container together. Missing Dashboard secrets are generated in ignored local .env. No host Hermes installation needed. Dashboard: http://127.0.0.1:9119 (separate login; see local HERMES_NATIVE_DASHBOARD_* settings). The old UI at 8080 remains available during migration; no automatic legacy recovery in the default pilot mode. Hermes model setup, CLI worker integration and real task recovery still require verification. See [Docker pilot](docs/hermes-first/WINDOWS-PILOT.md).
+
+### Hermes-first UI and Antigravity pilot
+Default startup now runs only the native Hermes UI at 9119; legacy Dashboard uses `-LegacyOnly`. The Hub plugin adds a status tab and opt-in Antigravity plan tool. See [pilot](docs/hermes-first/ANTIGRAVITY.md).
