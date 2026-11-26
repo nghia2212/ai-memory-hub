@@ -46,6 +46,13 @@ foreach ($svc in @(
     }
 }
 
+# Official Hermes Dashboard; do not confuse HTTP readiness with worker/model readiness.
+$hermesPort = if ($envMap['HERMES_NATIVE_PORT']) { [int]$envMap['HERMES_NATIVE_PORT'] } else { 9119 }
+try {
+    $hs = Invoke-RestMethod -Uri "http://127.0.0.1:$hermesPort/api/status" -TimeoutSec 3
+    Add-Row 'Hermes Official Dashboard' $(if ($hs.auth_required -eq $true) { 'AUTH READY' } else { 'UNSAFE/UNKNOWN' }) "http://127.0.0.1:$hermesPort (model/worker unverified)"
+} catch { Add-Row 'Hermes Official Dashboard' 'OFFLINE' "http://127.0.0.1:$hermesPort" }
+
 # 3. Hub-to-Host real link
 try {
     $st = Invoke-RestMethod -Uri "http://127.0.0.1:$dashPort/api/status" -TimeoutSec 4

@@ -8,6 +8,7 @@ verifies actual Hub-to-Host reachability, and triggers P16B startup recovery sca
 param(
     [switch]$StartDockerDesktop,
     [switch]$SkipRecoveryScan,
+    [switch]$LegacyOnly,
     [int]$HealthTimeoutSec = 90,
     [switch]$DryRun
 )
@@ -43,10 +44,21 @@ function Wait-EndpointReady([string]$Url, [int]$TimeoutSec) {
 try {
     Write-Step '1/6 Kiểm tra cấu hình .env và Docker...'
     $envPath = Join-Path $HubRoot '.env'
-    if (!(Test-Path -LiteralPath $envPath -PathType Leaf)) {
-        throw "[MISSING_ENV] Thiếu tệp .env tại $envPath. Chạy scripts\init-env.ps1 trước."
-    }
     $envMap = Read-EnvMap $envPath
+    if (!(Test-Path -LiteralPath $envPath -PathType Leaf) -or
+        (!$LegacyOnly -and (!$envMap['HERMES_NATIVE_DASHBOARD_PASSWORD'] -or !$envMap['HERMES_NATIVE_DASHBOARD_SECRET']))) {
+        if ($DryRun) {
+            Write-Host '[DRYRUN] Would initialize missing local environment keys; no credentials written.'
+        } else {
+            & (Join-Path $PSScriptRoot 'init-env.ps1') -EnvFilePath $envPath
+            if ($LASTEXITCODE -ne 0) { throw 'Local environment bootstrap failed.' }
+            $envMap = Read-EnvMap $envPath
+            if (!$LegacyOnly -and (!$envMap['HERMES_NATIVE_DASHBOARD_PASSWORD'] -or !$envMap['HERMES_NATIVE_DASHBOARD_SECRET'])) {
+                throw 'Missing Hermes dashboard authentication configuration.'
+            }
+        }
+    }
+    $hermesPort = if ($envMap['HERMES_NATIVE_PORT']) { [int]$envMap['HERMES_NATIVE_PORT'] } else { 9119 }
     $bridgePort = if ($envMap['BRIDGE_PORT']) { [int]$envMap['BRIDGE_PORT'] } else { 8082 }
     $codebasePort = if ($envMap['CODEBASE_PORT']) { [int]$envMap['CODEBASE_PORT'] } else { 8081 }
     $dashPort = if ($envMap['HUB_PORT']) { [int]$envMap['HUB_PORT'] } else { 8080 }
@@ -87,13 +99,16 @@ try {
     }
 
     if ($DryRun) {
+        if (!$LegacyOnly) { Write-Host "[DRYRUN] Would start official Hermes with Hub (port $hermesPort, persistent volume)." }
         Write-Host "[DRYRUN] Docker OK | Ports: Bridge=$bridgePort, Codebase=$codebasePort, Dashboard=$dashPort, HostAgent=$hostPort" -ForegroundColor Green
         & (Join-Path $PSScriptRoot 'start-host-brain-agent.ps1') -Port $hostPort -DryRun
         exit 0
     }
 
     Write-Step '2/6 Khởi động các container bắt buộc (bảo toàn 100% SQLite volumes, không bật optional MCP/IDE)...'
-    & docker compose up -d codebase memory-bridge dashboard
+    $services = @('codebase','memory-bridge','dashboard')
+    if (!$LegacyOnly) { $services += 'hermes-native' }
+    & docker compose up -d @services
     if ($LASTEXITCODE -ne 0) {
         throw "[COMPOSE_UP_FAILED] docker compose up -d thất bại (exit=$LASTEXITCODE)."
     }
@@ -103,6 +118,21 @@ try {
     $null = Wait-EndpointReady "http://127.0.0.1:$codebasePort/healthz" $HealthTimeoutSec
     $null = Wait-EndpointReady "http://127.0.0.1:$dashPort/healthz" $HealthTimeoutSec
     Write-Host "  [OK] Memory Bridge (schema=$($bh.schema_version)), Codebase, Dashboard đều sẵn sàng." -ForegroundColor Green
+
+    if (!$LegacyOnly) {
+        Write-Step 'Hermes: checking actual authenticated Dashboard endpoint...'
+        $deadline = (Get-Date).AddSeconds($HealthTimeoutSec)
+        $hermesReady = $false
+        while ((Get-Date) -lt $deadline) {
+            try {
+                $hs = Invoke-RestMethod -Uri "http://127.0.0.1:$hermesPort/api/status" -TimeoutSec 4
+                if ($hs.auth_required -eq $true) { $hermesReady = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 2
+        }
+        if (!$hermesReady) { throw '[HERMES_NOT_READY] Inspect docker compose logs --tail 100 hermes-native. Core containers remain intact.' }
+        Write-Host "Hermes Dashboard: http://127.0.0.1:$hermesPort (credentials in local .env; model/worker readiness not yet verified)." -ForegroundColor Green
+    }
 
     Write-Step '4/6 Khởi động / xác minh Host Brain Agent (single-instance, không tạo trùng)...'
     & (Join-Path $PSScriptRoot 'start-host-brain-agent.ps1') -Port $hostPort -TimeoutSec 20
@@ -128,7 +158,7 @@ try {
     }
     Write-Host "  [OK] Kết nối thực tế Hub -> Host Brain Agent: READY ($($lastStatus.host_brain.detail))." -ForegroundColor Green
 
-    if (!$SkipRecoveryScan -and $envMap['BRIDGE_ADMIN_TOKEN']) {
+    if ($LegacyOnly -and !$SkipRecoveryScan -and $envMap['BRIDGE_ADMIN_TOKEN']) {
         Write-Step '6/6 Quét phục hồi nhiệm vụ P16B (Hybrid Recovery)...'
         try {
             $hdr = @{ Authorization = ('Bearer ' + $envMap['BRIDGE_ADMIN_TOKEN']) }
@@ -139,6 +169,9 @@ try {
         }
     }
 
+    if (!$LegacyOnly) {
+        Write-Warning 'Hermes pilot: legacy automatic recovery suppressed; use isolated synthetic boards only. No CLI worker adapter or production cutover yet.'
+    }
     Write-Host "`nAI Memory Hub đã khởi động đầy đủ và sẵn sàng tại: http://127.0.0.1:$dashPort" -ForegroundColor Green
 } finally {
     Pop-Location

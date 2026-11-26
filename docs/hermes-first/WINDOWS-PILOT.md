@@ -1,37 +1,40 @@
-# Windows pilot (H0–H2)
-This is a parallel **isolated pilot**, not a production replacement. Existing Hub, Docker volumes, credentials and ongoing tasks are not modified by the native launcher. Do not run both schedulers on the same worktree/project. Use a disposable repo and synthetic prompts. Do not give production code or private data to a model without approval.
+# Hermes-first Docker pilot on Windows
+No separate Hermes installation. The official image is managed by the existing Hub Compose project. Use Docker Desktop Linux containers. This is a pilot, not production cutover: no worker adapter, no automatic migration and no dual-dispatch of a project.
 
-1. Before eventual migration: inventory running/queued/blocked tasks. Drain jobs; back up Memory Bridge using its existing authenticated backup mechanism (see docs/INTERFACE-V1.md), verify restore on a separate instance. Back up local config separately to a private location, never Git. Do not copy live SQLite files. No backup or migration is performed by these scripts.
-2. Install official Hermes v0.23.4 via the release page (https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.4); verify installer provenance and version. Open a new PowerShell terminal. If a native install exists, do not overwrite its configuration.
-3. Run the following once (if the profile already exists, inspect it rather than recreating):
+## Start
+1. Preserve legacy data and drain active legacy jobs before testing. Back up through the existing Memory Bridge backup API and verify restore separately.
+2. Run from repo root:
    
-       hermes profile create hub-pilot --no-credentials --no-alias
-       hermes -p hub-pilot setup
+       .\scripts\Start-AIMemoryHub.ps1 -StartDockerDesktop -HealthTimeoutSec 180
 
-   Select an approved model, avoid paid API fallback, disable unneeded tools and messaging integrations. Do not import all credentials. Profile isolation does not imply physical filesystem sandboxing.
-4. In the Hub repo:
+   Start pulls the pinned official image if missing, creates the named volume, provisions missing dashboard credentials through init-env.ps1 and waits for authenticated Dashboard /api/status. Existing .env values are preserved by the existing bootstrap; backup is ignored by Git. It also starts the existing Hub services and Host Brain Agent, but suppresses legacy automatic recovery in pilot mode. Do not submit the same project to both schedulers. No production tasks should be submitted to Hermes yet.
+3. Open http://127.0.0.1:9119. Credentials are HERMES_NATIVE_DASHBOARD_USER and HERMES_NATIVE_DASHBOARD_PASSWORD in local .env. Do not share or commit them. Existing legacy UI remains on 8080. The official dashboard is not embedded in the old UI yet.
+4. Configure an approved model/provider via official Dashboard or interactive setup:
    
-       .\scripts\hermes\Start-HermesEdition.ps1 -Action Check
-       .\scripts\hermes\Start-HermesEdition.ps1 -Action CreateBoard
-       .\scripts\hermes\Start-HermesEdition.ps1 -Action List
-       .\scripts\hermes\Start-HermesEdition.ps1 -Action Dashboard
+       docker compose exec --user hermes -e HOME=/opt/data hermes-native hermes setup
 
-   Open http://127.0.0.1:9119. CreateBoard is explicit and intended once; if already created, use List. Dashboard runs in foreground. No task is queued by these commands.
-5. On the pilot board, add a synthetic task, leave it unassigned until review. Verify board persistence after restarting Dashboard. Configure an approved worker profile and test only in a disposable workspace. Start gateway in a separate PowerShell window **only after reviewing all boards/profiles**; Hermes gateway may dispatch ready cards:
+   Model credentials require explicit operator setup; do not auto-import host tokens or enable paid fallback. No host workspace mount or Docker socket. For native Kanban, use disposable synthetic tasks only. Gateway is already supervised and may dispatch eligible tasks.
+5. Check status:
+   
+       .\scripts\Status-AIMemoryHub.ps1
+       docker compose ps
+       docker compose exec --user hermes -e HOME=/opt/data hermes-native hermes --version
 
-       .\scripts\hermes\Start-HermesEdition.ps1 -Action Gateway
+   Dashboard readiness is not proof of worker, model auth, MCP or recovery readiness.
+6. Inspect Hermes Kanban and wait for all workers to finish before stopping:
+   
+       .\scripts\Stop-AIMemoryHub.ps1 -HermesDrained
 
-   Record real task IDs, status, events, review and restart behavior. Never put secrets in task bodies. Stop pilot foreground processes with Ctrl+C.
-6. For H4 later, after draining and stopping legacy jobs/runners, start only existing memory services with scripts/hermes/Start-MemoryServices.ps1. Register existing authenticated local MCP endpoints through native Hermes MCP settings; do not expose bridge credentials to the browser or Git. Verify project/worktree isolation. This is not automatic configuration.
-7. Rollback: stop pilot gateway/dashboard, leave pilot data intact, return to legacy branch/launcher only after verifying no overlapping workers. No deletion of volumes or upstream profiles. Keep old tasks in their original system until H8 reconciliation.
+   Stop preserves both legacy volumes and hermes-native-data. Restart uses the same state; interrupted task behavior still requires an actual test. Use -Force only when accepting interruption. No down -v.
+7. Rollback: after draining Hermes, explicitly stop it with docker compose stop hermes-native; start with scripts/Start-AIMemoryHub.ps1 -LegacyOnly. LegacyOnly does not stop an already running Hermes container. No data deletion.
+8. For Docker Compose directly, run scripts/init-env.ps1 first (secrets are mandatory) then docker compose up -d. Prefer unified launcher to check readiness and start Windows Host Brain.
 
-## Evidence checklist
-- [ ] Official runtime installed, exact version, profile and credentials verified.
-- [ ] Scratch board create/list and native dashboard.
-- [ ] Gateway worker run, review gate, restart with durable board, no duplicate claim.
-- [ ] Claude/Codex real subscription execution and quota exhaustion behavior.
-- [ ] Existing memory data preserved; backup/restore independently verified.
-- [ ] No production job resumed or dispatched by pilot.
-- [ ] Record measured usage, success and failure evidence (no guessed quota).
+## Gates not yet passed
+- Real Windows Docker pull/start/login and restart persistence.
+- Approved model authentication and scratch Kanban worker lifecycle.
+- Legacy task drain, backup/restore and migration.
+- Claude/Codex/Gemini/agy external worker adapter, quota and permissions.
+- Native MCP registration of existing project memory, correct scope.
+- Real token and recovery evidence.
 
-No Windows runtime tests have been executed by the GitHub-only migration author. Do not treat this checklist as passing.
+References: https://github.com/NousResearch/hermes-agent/blob/v0.23.4/website/docs/user-guide/docker.md and https://github.com/NousResearch/hermes-agent/blob/v0.23.4/website/docs/user-guide/features/web-dashboard.md.

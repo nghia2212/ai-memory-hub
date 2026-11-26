@@ -2,13 +2,13 @@
 Status: H0-H2 pilot wiring only; live gates pending. Base: 06ec853f6ca379a1ea89eaf95332ac3875a5d995. No production cutover.
 
 ## Architecture decision
-Hermes v0.23.4 is the upstream runtime baseline, not the existing Python summarization worker. Native Windows first. Hermes Kanban is the single task lifecycle owner for migrated projects. Never dual-dispatch or write upstream SQLite directly. Use upstream CLI/tools/plugin API for lifecycle. Use existing Memory Bridge/Codebase MCP for structured project memory; no LLM on lookup. Keep legacy state and startup untouched until tested rollback. Prefer built-in Dashboard, profiles, Skills, sessions, memory, tools, MCP, cron and upstream kanban-graph/monitor plugins (audit permissions and compatibility before installing). Do not implement a second scheduler, DAG, memory UI or generic MCP registry.
+Hermes v0.23.4 is the upstream runtime baseline, not the existing Python summarization worker. Docker-first: use official image with its default s6 init, supervised Gateway/Dashboard and separate named volume; retain Windows CLI on host. Hermes Kanban is the single task lifecycle owner for migrated projects. Never dual-dispatch or write upstream SQLite directly. Use upstream CLI/tools/plugin API for lifecycle. Use existing Memory Bridge/Codebase MCP for structured project memory; no LLM on lookup. Keep legacy state and startup untouched until tested rollback. Prefer built-in Dashboard, profiles, Skills, sessions, memory, tools, MCP, cron and upstream kanban-graph/monitor plugins (audit permissions and compatibility before installing). Do not implement a second scheduler, DAG, memory UI or generic MCP registry.
  
 ## Gates
 | Phase | Work | Exit gate |
 | --- | --- | --- |
 | H0 | inventory legacy sessions, drain/stop, online backup, verify restore in separate instance | no active claims, checksum and restore evidence |
-| H1 | official native Windows release + isolated pilot profile; launcher in scripts/hermes | exact version, model auth, no shared credentials by default |
+| H1 | official Docker image + isolated persistent volume; unified Hub Start/Stop/Status | exact version, model auth, no shared credentials by default |
 | H2 | native Kanban/Dashboard, memory, skill and MCP smoke tests | scratch board survives gateway and Windows restart, dependencies enforced, one claim, no duplicate execution |
 | H3 | native profile lanes first; reuse existing safe CLI command construction for external worker adapters only where needed | Claude/Codex subscription auth + cancellation, exit mapping, review, heartbeat, quota failure and resume; then Gemini/agy |
 | H4 | register existing Bridge/Codebase MCP with project scope and read-only tokens initially | correct project/worktree results, no leakage, no LLM on retrieval |
